@@ -12,7 +12,7 @@ module.exports = {
    * @param {string} from - Sender JID
    * @param {Array} args - Command arguments
    */
-  execute: async (sock, from, args) => {
-    await sock.sendMessage(from, { text: "Hello! 👋 I am your bot." });
+  execute: async (sock, from, args, msg) => {
+    await sock.sendMessage(from, { text: "Hello! I am your bot. (Test tanpa emoji)" }, { quoted: msg });
   }
 };

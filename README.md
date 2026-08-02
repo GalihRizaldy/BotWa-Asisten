@@ -1,8 +1,3 @@
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=flat-square&color=cyan)](https://nodejs.org/)
-[![GitHub code](https://img.shields.io/github/languages/code-size/nexoslabs/bot-whatsapp-template.svg?logo=github&style=flat-square&color=cyan)](https://github.com/nexoslabs/bot-whatsapp-template)
-[![GitHub stars](https://img.shields.io/github/stars/nexoslabs/bot-whatsapp-template.svg?logo=github&style=flat-square&color=cyan)](https://github.com/nexoslabs/bot-whatsapp-template)
-[![GitHub issues](https://img.shields.io/github/issues/nexoslabs/bot-whatsapp-template?logo=github&style=flat-square&color=cyan)](https://github.com/nexoslabs/bot-whatsapp-template/issues)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?logo=github&style=flat-square&color=cyan)](./LICENSE)
 
 # WhatsApp Bot (Baileys) 🤖
 
@@ -111,9 +106,7 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 
 ## 📬 Contact & Community
 
-💬 Join us on **Discord**: [Click Here](https://discord.gg/H7pVc9aUK2)  
-🐦 **Follow on Twitter**: [@nexoslabs](https://twitter.com/nexoslabs)  
-📧 **Email**: [contact@nexoscreation.tech](mailto:contact@nexoscreation.tech)
+
 
 If you find this project helpful, please consider **starring ⭐ the repository** or **sponsoring 💖 on GitHub**!
 

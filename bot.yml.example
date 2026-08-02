@@ -1,11 +1,13 @@
 # =====================
 # WhatsApp Bot Settings
 # =====================
-bot: 
+bot:
   name: "Nexos Bot"             # The display name of your bot
   online: true                  # Should the bot appear online?
   prefix: ">"                   # Command prefix (e.g., !, >, /)
   history: false                # Enable/disable chat history
+  gemini_api_key: ""            # Isi dengan API Key dari https://aistudio.google.com/app/apikey
+  spreadsheet_id: ""            # Isi dengan ID Google Spreadsheet Anda
 
 # =====================
 # Logging
@@ -13,6 +15,7 @@ bot:
 logging:
   level: info                   # Log level: error, warn, info, debug
   logToFile: true               # Save logs to file
+
 
 # =====================
 # Add more config options as needed

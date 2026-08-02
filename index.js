@@ -56,11 +56,10 @@ async function startBot() {
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: "silent" }),
-      browser: ["NexosBot", "Opera GX", "120.0.5543.204"],
       generateHighQualityLinkPreview: true,
       markOnlineOnConnect: config.bot?.online || true,
       syncFullHistory: config.bot?.history || false,
-      shouldSyncHistoryMessage: config.bot?.history || false,
+      shouldSyncHistoryMessage: () => config.bot?.history || false,
     });
 
   // Save login credentials on update

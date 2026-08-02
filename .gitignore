@@ -13,3 +13,23 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# =====================
+# KEAMANAN (Jangan pernah upload ke GitHub!)
+# =====================
+
+# Google Service Account (rahasia)
+google-credentials.json
+*-credentials.json
+*.pem
+
+# Konfigurasi bot (berisi API Key)
+bot.yml
+
+# Environment variables
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
