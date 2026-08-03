@@ -6,7 +6,7 @@ const config = require("../utils");
 
 /**
  * Asisten Keuangan Pintar — Gemini AI + Spreadsheet
- * Bisa mencatat transaksi, menjawab pertanyaan keuangan, dan ngobrol biasa.
+ * Mendukung: catat_transaksi, edit_transaksi_terakhir, koreksi_saldo, tanya, chat
  * Usage: >asisten [pesan]
  */
 
@@ -22,9 +22,52 @@ async function getSheet(sheetId, sheetName) {
   return doc.sheetsByTitle[sheetName] || doc.sheetsByIndex[0];
 }
 
+// Helper: Format Rupiah
+function formatRupiah(nominal) {
+  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(nominal);
+}
+
+// System Prompt untuk ekstraksi JSON (dari instruksi user)
+const EXTRACTION_PROMPT = `Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
+
+Kategori 'action' yang tersedia:
+1. "catat_transaksi" -> Untuk pencatatan pengeluaran atau pemasukan baru biasa.
+2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya (contoh: "edit transaksi tadi harusnya 15rb dari dana", "eh salah tadi harusnya 20rb dari cash", "revisi transaksi terakhir").
+3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu (contoh: "sesuaikan update untuk sumber dari cash harusnya pemasukan 300rb pengeluaran 0").
+4. "tanya" -> Jika pengguna bertanya tentang data keuangan, laporan, rangkuman, total, atau riwayat transaksi.
+5. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+
+Aturan Ekstraksi JSON:
+
+A. Jika action = "catat_transaksi":
+   - 'tipe': "pemasukan" atau "pengeluaran"
+   - 'kategori': nama kategori (misal: makanan, transportasi, kebutuhan, dll)
+   - 'keterangan': deskripsi singkat transaksi
+   - 'nominal': angka (integer)
+   - 'sumber': nama dompet/sumber uang dalam huruf kecil (misal: "cash", "dana", "bank jago", "shopeepay"). Gunakan default "cash" jika tidak disebutkan.
+
+B. Jika action = "edit_transaksi_terakhir":
+   - Extract field yang diubah oleh pengguna (misal: 'nominal': 15000, 'sumber': "dana", 'keterangan', 'kategori', 'tipe').
+   - Isikan field yang diubah dengan nilai baru, dan berikan nilai null/kosong pada field yang tidak diubah.
+   - Tambahkan field 'is_edit': true.
+
+C. Jika action = "koreksi_saldo":
+   - 'sumber': nama sumber uang yang ingin disesuaikan (misal: "cash").
+   - 'nominal_pemasukan': angka nominal baru untuk pemasukan (jika ada/disebutkan).
+   - 'nominal_pengeluaran': angka nominal baru untuk pengeluaran (jika ada/disebutkan).
+   - 'keterangan': "Penyesuaian saldo / koreksi manual".
+
+D. Jika action = "tanya":
+   - 'pertanyaan': isi pertanyaan pengguna.
+
+E. Jika action = "chat":
+   - 'pesan': isi pesan pengguna.
+
+Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
+
 module.exports = {
   name: "asisten",
-  description: "Asisten keuangan pintar: catat, tanya laporan, atau ngobrol.",
+  description: "Asisten keuangan pintar: catat, edit, koreksi saldo, tanya laporan, atau ngobrol.",
   execute: async (sock, from, args, msg) => {
     const apiKey = config.bot?.gemini_api_key;
     const sheetId = config.bot?.spreadsheet_id;
@@ -36,51 +79,32 @@ module.exports = {
 
     const prompt = args.join(" ");
     if (!prompt) {
-      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
+      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
       return;
     }
 
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
+      const waId = msg.key.participant || msg.key.remoteJid;
 
-      // ===== TAHAP 1: DETEKSI NIAT (Intent Detection) =====
-      const classifierModel = genAI.getGenerativeModel({
+      // ===== TAHAP 1: KLASIFIKASI + EKSTRAKSI (1 panggilan AI) =====
+      const extractModel = genAI.getGenerativeModel({
         model: "gemini-3.1-flash-lite",
-        systemInstruction: "Kamu adalah pengklasifikasi pesan. Tentukan apakah pesan pengguna bermaksud: 'catat' (mencatat transaksi keuangan baru, ada nominal/barang), 'tanya' (bertanya tentang data keuangan/laporan/rangkuman), atau 'chat' (sapaan/obrolan biasa). Balas HANYA dengan satu kata: catat, tanya, atau chat.",
+        systemInstruction: EXTRACTION_PROMPT,
       });
 
-      const intentResult = await classifierModel.generateContent(prompt);
-      const intent = intentResult.response.text().trim().toLowerCase();
-      console.log(`[ASISTEN] Intent terdeteksi: "${intent}" dari pesan: "${prompt}"`);
+      const extractResult = await extractModel.generateContent(prompt);
+      let rawText = extractResult.response.text().trim();
+      // Bersihkan jika ada tag markdown ```json ... ```
+      rawText = rawText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
+      const data = JSON.parse(rawText);
 
-      // ===== JALUR 1: CATAT TRANSAKSI =====
-      if (intent === "catat") {
-        const extractModel = genAI.getGenerativeModel({
-          model: "gemini-3.1-flash-lite",
-          systemInstruction: "Kamu adalah asisten pencatat keuangan. Ekstrak data transaksi dari chat pengguna.",
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: "OBJECT",
-              properties: {
-                tipe: { type: "STRING", description: "Pilih: 'pemasukan' atau 'pengeluaran'" },
-                kategori: { type: "STRING", description: "Contoh: makanan, kebutuhan, topup, transportasi, gaji, hiburan" },
-                keterangan: { type: "STRING", description: "Deskripsi singkat transaksi" },
-                nominal: { type: "NUMBER", description: "Nominal angka bulat, contoh: 15000" },
-                sumber: { type: "STRING", description: "Sumber/metode pembayaran, contoh: cash, dana, gopay, bca. Jika tidak disebutkan, isi 'cash'" }
-              },
-              required: ["tipe", "kategori", "keterangan", "nominal", "sumber"]
-            }
-          }
-        });
+      console.log(`[ASISTEN] Action: "${data.action}" | Data:`, JSON.stringify(data));
 
-        const extractResult = await extractModel.generateContent(prompt);
-        const data = JSON.parse(extractResult.response.text().trim());
-
-        // Tulis ke Spreadsheet
+      // ===== AKSI 1: CATAT TRANSAKSI BARU =====
+      if (data.action === "catat_transaksi") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-        const waId = msg.key.participant || msg.key.remoteJid;
 
         await sheet.addRow({
           Timestamp: timestamp,
@@ -89,27 +113,138 @@ module.exports = {
           Kategori: data.kategori,
           Keterangan: data.keterangan,
           Nominal: data.nominal,
-          Sumber: data.sumber
+          Sumber: data.sumber || "cash"
         });
 
-        const formatRupiah = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(data.nominal);
         const emoji = data.tipe === 'pemasukan' ? '💰' : '💸';
         const reply = `${emoji} *Tercatat!*\n\n` +
           `• *${data.tipe.toUpperCase()}*: ${data.keterangan}\n` +
-          `• *Nominal*: ${formatRupiah}\n` +
+          `• *Nominal*: ${formatRupiah(data.nominal)}\n` +
           `• *Kategori*: ${data.kategori}\n` +
-          `• *Sumber*: ${data.sumber}\n\n` +
+          `• *Sumber*: ${data.sumber || "cash"}\n\n` +
           `_Sudah masuk ke Spreadsheet._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
-      // ===== JALUR 2: TANYA LAPORAN =====
-      } else if (intent === "tanya") {
-        // Baca data dari Spreadsheet untuk diberikan ke AI
+      // ===== AKSI 2: EDIT TRANSAKSI TERAKHIR =====
+      } else if (data.action === "edit_transaksi_terakhir") {
+        const sheet = await getSheet(sheetId, 'transaksi');
+        const rows = await sheet.getRows();
+        const userId = waId.split('@')[0];
+
+        // Cari transaksi terakhir milik user ini
+        let lastRow = null;
+        for (let i = rows.length - 1; i >= 0; i--) {
+          if (rows[i].get('WA_ID') === userId) {
+            lastRow = rows[i];
+            break;
+          }
+        }
+
+        if (!lastRow) {
+          await sock.sendMessage(from, { text: "Tidak ditemukan transaksi sebelumnya untuk diedit." }, { quoted: msg });
+          return;
+        }
+
+        // Simpan data lama untuk ditampilkan
+        const oldData = {
+          tipe: lastRow.get('Tipe'),
+          kategori: lastRow.get('Kategori'),
+          keterangan: lastRow.get('Keterangan'),
+          nominal: lastRow.get('Nominal'),
+          sumber: lastRow.get('Sumber')
+        };
+
+        // Update hanya field yang diubah (non-null)
+        if (data.tipe) lastRow.set('Tipe', data.tipe);
+        if (data.kategori) lastRow.set('Kategori', data.kategori);
+        if (data.keterangan) lastRow.set('Keterangan', data.keterangan);
+        if (data.nominal) lastRow.set('Nominal', data.nominal);
+        if (data.sumber) lastRow.set('Sumber', data.sumber);
+
+        await lastRow.save();
+
+        // Buat laporan perubahan
+        let changes = [];
+        if (data.tipe) changes.push(`Tipe: ${oldData.tipe} → ${data.tipe}`);
+        if (data.kategori) changes.push(`Kategori: ${oldData.kategori} → ${data.kategori}`);
+        if (data.keterangan) changes.push(`Keterangan: ${oldData.keterangan} → ${data.keterangan}`);
+        if (data.nominal) changes.push(`Nominal: ${formatRupiah(Number(oldData.nominal))} → ${formatRupiah(data.nominal)}`);
+        if (data.sumber) changes.push(`Sumber: ${oldData.sumber} → ${data.sumber}`);
+
+        const reply = `✏️ *Transaksi Diperbarui!*\n\n` +
+          changes.map(c => `• ${c}`).join('\n') +
+          `\n\n_Spreadsheet sudah diupdate._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI 3: KOREKSI SALDO =====
+      } else if (data.action === "koreksi_saldo") {
+        const sheet = await getSheet(sheetId, 'transaksi');
+        const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        const sumber = data.sumber || "cash";
+
+        // Hitung total saat ini untuk sumber tersebut
+        const rows = await sheet.getRows();
+        let totalPemasukan = 0;
+        let totalPengeluaran = 0;
+        rows.forEach(row => {
+          if (row.get('Sumber')?.toLowerCase() === sumber.toLowerCase()) {
+            const nominal = Number(row.get('Nominal')) || 0;
+            if (row.get('Tipe')?.toLowerCase() === 'pemasukan') totalPemasukan += nominal;
+            if (row.get('Tipe')?.toLowerCase() === 'pengeluaran') totalPengeluaran += nominal;
+          }
+        });
+
+        // Tambahkan baris koreksi jika ada selisih
+        let koreksiDone = [];
+
+        if (data.nominal_pemasukan !== undefined && data.nominal_pemasukan !== null) {
+          const selisihMasuk = data.nominal_pemasukan - totalPemasukan;
+          if (selisihMasuk !== 0) {
+            await sheet.addRow({
+              Timestamp: timestamp,
+              WA_ID: waId.split('@')[0],
+              Tipe: selisihMasuk >= 0 ? "pemasukan" : "pengeluaran",
+              Kategori: "koreksi",
+              Keterangan: `Koreksi saldo pemasukan ${sumber} (${formatRupiah(totalPemasukan)} → ${formatRupiah(data.nominal_pemasukan)})`,
+              Nominal: Math.abs(selisihMasuk),
+              Sumber: sumber
+            });
+            koreksiDone.push(`Pemasukan ${sumber}: ${formatRupiah(totalPemasukan)} → ${formatRupiah(data.nominal_pemasukan)}`);
+          }
+        }
+
+        if (data.nominal_pengeluaran !== undefined && data.nominal_pengeluaran !== null) {
+          const selisihKeluar = data.nominal_pengeluaran - totalPengeluaran;
+          if (selisihKeluar !== 0) {
+            await sheet.addRow({
+              Timestamp: timestamp,
+              WA_ID: waId.split('@')[0],
+              Tipe: selisihKeluar >= 0 ? "pengeluaran" : "pemasukan",
+              Kategori: "koreksi",
+              Keterangan: `Koreksi saldo pengeluaran ${sumber} (${formatRupiah(totalPengeluaran)} → ${formatRupiah(data.nominal_pengeluaran)})`,
+              Nominal: Math.abs(selisihKeluar),
+              Sumber: sumber
+            });
+            koreksiDone.push(`Pengeluaran ${sumber}: ${formatRupiah(totalPengeluaran)} → ${formatRupiah(data.nominal_pengeluaran)}`);
+          }
+        }
+
+        if (koreksiDone.length === 0) {
+          await sock.sendMessage(from, { text: `Saldo ${sumber} sudah sesuai, tidak ada koreksi yang diperlukan.` }, { quoted: msg });
+        } else {
+          const reply = `🔧 *Koreksi Saldo Berhasil!*\n\n` +
+            koreksiDone.map(c => `• ${c}`).join('\n') +
+            `\n\n_Spreadsheet sudah diupdate._`;
+          await sock.sendMessage(from, { text: reply }, { quoted: msg });
+        }
+
+      // ===== AKSI 4: TANYA LAPORAN =====
+      } else if (data.action === "tanya") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const rows = await sheet.getRows();
 
-        // Ambil data transaksi dan format menjadi teks ringkas
         let dataSummary = "DATA TRANSAKSI DI SPREADSHEET:\n";
         if (rows.length === 0) {
           dataSummary += "(Belum ada data transaksi)\n";
@@ -129,7 +264,7 @@ module.exports = {
 
         await sock.sendMessage(from, { text: `📊 ${answer}` }, { quoted: msg });
 
-      // ===== JALUR 3: NGOBROL BIASA =====
+      // ===== AKSI 5: NGOBROL BIASA =====
       } else {
         const chatModel = genAI.getGenerativeModel({
           model: "gemini-3.1-flash-lite",
