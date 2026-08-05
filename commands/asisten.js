@@ -46,6 +46,21 @@ A. Jika action = "catat_transaksi":
    - 'nominal': angka (integer)
    - 'sumber': nama dompet/sumber uang dalam huruf kecil (misal: "cash", "dana", "bank jago", "shopeepay"). Gunakan default "cash" jika tidak disebutkan.
 
+   Aturan Tambahan untuk Pinjaman:
+   1. Jika pengguna mengirim pesan pinjaman keluar (contoh: "galih telah melakukan pinjaman 50rb pakai dana", "pinjemin galih 50rb"):
+      - 'tipe': "pengeluaran"
+      - 'kategori': "pinjaman"
+      - 'keterangan': "pinjaman [nama orang]"
+      - 'nominal': angka pinjaman
+      - 'sumber': sumber dana yang digunakan
+
+   2. Jika pengguna mengirim pesan pengembalian/pembayaran utang (contoh: "galih bayar utang 30rb ke dana", "terima cicilan galih 30rb"):
+      - 'tipe': "pemasukan"
+      - 'kategori': "bayar_pinjaman"
+      - 'keterangan': "bayar pinjaman [nama orang]"
+      - 'nominal': angka pembayaran
+      - 'sumber': sumber dana tujuan
+
 B. Jika action = "edit_transaksi_terakhir":
    - Extract field yang diubah oleh pengguna (misal: 'nominal': 15000, 'sumber': "dana", 'keterangan', 'kategori', 'tipe').
    - Isikan field yang diubah dengan nilai baru, dan berikan nilai null/kosong pada field yang tidak diubah.
