@@ -6,12 +6,12 @@ const config = require("../utils");
 
 /**
  * Asisten Keuangan Pintar — Gemini AI + Spreadsheet
- * Mendukung: catat_transaksi, edit_transaksi_terakhir, koreksi_saldo, tanya, chat
+ * Mendukung: catat_transaksi, edit_transaksi_terakhir, koreksi_saldo, rekap_bulanan, tanya, chat
  * Usage: >asisten [pesan]
  */
 
 // Helper: Inisialisasi koneksi ke Google Spreadsheet
-async function getSheet(sheetId, sheetName) {
+async function getDoc(sheetId) {
   const serviceAccountAuth = new JWT({
     email: creds.client_email,
     key: creds.private_key,
@@ -19,7 +19,73 @@ async function getSheet(sheetId, sheetName) {
   });
   const doc = new GoogleSpreadsheet(sheetId, serviceAccountAuth);
   await doc.loadInfo();
+  return doc;
+}
+
+async function getSheet(sheetId, sheetName) {
+  const doc = await getDoc(sheetId);
   return doc.sheetsByTitle[sheetName] || doc.sheetsByIndex[0];
+}
+
+// Helper: Mapping nama bulan Indonesia
+const NAMA_BULAN = {
+  'januari': 1, 'februari': 2, 'maret': 3, 'april': 4,
+  'mei': 5, 'juni': 6, 'juli': 7, 'agustus': 8,
+  'september': 9, 'oktober': 10, 'november': 11, 'desember': 12
+};
+const BULAN_LABEL = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+// Helper: Parse timestamp ke { bulan (1-12), tahun }
+// Mendukung format: "2026-08-16 ..." (ISO) dan "8/16/2026 ..." atau "16/8/2026" (lokal)
+function parseTimestampMonth(ts) {
+  if (!ts) return null;
+  const str = String(ts).trim();
+
+  // ISO: 2026-08-16 atau 2026-08-16T...
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) return { bulan: parseInt(isoMatch[2]), tahun: parseInt(isoMatch[1]) };
+
+  // Lokal ID: 16/8/2026 atau 8/16/2026
+  const localMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (localMatch) {
+    const a = parseInt(localMatch[1]);
+    const b = parseInt(localMatch[2]);
+    const y = parseInt(localMatch[3]);
+    // Jika angka pertama > 12 pasti tanggal (format d/m/y)
+    if (a > 12) return { bulan: b, tahun: y };
+    // Jika angka kedua > 12 pasti tanggal (format m/d/y)
+    if (b > 12) return { bulan: a, tahun: y };
+    // Default: anggap m/d/y (format JS toLocaleString)
+    return { bulan: a, tahun: y };
+  }
+
+  // Fallback: coba parse dengan Date
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) return { bulan: d.getMonth() + 1, tahun: d.getFullYear() };
+
+  return null;
+}
+
+// Helper: Parse string bulan dari AI (misal "Agustus 2026") ke { bulan, tahun }
+function parseBulanRequest(bulanStr) {
+  const now = new Date();
+  if (!bulanStr) return { bulan: now.getMonth() + 1, tahun: now.getFullYear() };
+
+  const lower = bulanStr.toLowerCase().trim();
+  for (const [nama, num] of Object.entries(NAMA_BULAN)) {
+    if (lower.includes(nama)) {
+      const yearMatch = lower.match(/(\d{4})/);
+      const tahun = yearMatch ? parseInt(yearMatch[1]) : now.getFullYear();
+      return { bulan: num, tahun };
+    }
+  }
+  // Jika hanya angka bulan
+  const numMatch = lower.match(/(\d{1,2})/);
+  if (numMatch) {
+    const b = parseInt(numMatch[1]);
+    if (b >= 1 && b <= 12) return { bulan: b, tahun: now.getFullYear() };
+  }
+  return { bulan: now.getMonth() + 1, tahun: now.getFullYear() };
 }
 
 // Helper: Format Rupiah
@@ -34,8 +100,9 @@ Kategori 'action' yang tersedia:
 1. "catat_transaksi" -> Untuk pencatatan pengeluaran atau pemasukan baru biasa.
 2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya (contoh: "edit transaksi tadi harusnya 15rb dari dana", "eh salah tadi harusnya 20rb dari cash", "revisi transaksi terakhir").
 3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu (contoh: "sesuaikan update untuk sumber dari cash harusnya pemasukan 300rb pengeluaran 0").
-4. "tanya" -> Jika pengguna bertanya tentang data keuangan, laporan, rangkuman, total, atau riwayat transaksi.
-5. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan (contoh: "rekap pengeluaran", "laporan keuangan bulan ini", "rekap agustus", "laporan bulan juli").
+5. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
+6. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
 
 Aturan Ekstraksi JSON:
 
@@ -72,10 +139,14 @@ C. Jika action = "koreksi_saldo":
    - 'nominal_pengeluaran': angka nominal baru untuk pengeluaran (jika ada/disebutkan).
    - 'keterangan': "Penyesuaian saldo / koreksi manual".
 
-D. Jika action = "tanya":
+D. Jika action = "rekap_bulanan":
+   - 'bulan': nama bulan dan tahun yang diminta (misal: "Agustus 2026"). Jika pengguna tidak menyebutkan bulan spesifik, gunakan bulan saat ini.
+   - 'is_transaction': false
+
+E. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-E. Jika action = "chat":
+F. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
 Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
@@ -94,7 +165,7 @@ module.exports = {
 
     const prompt = args.join(" ");
     if (!prompt) {
-      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
+      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
       return;
     }
 
@@ -255,7 +326,111 @@ module.exports = {
           await sock.sendMessage(from, { text: reply }, { quoted: msg });
         }
 
-      // ===== AKSI 4: TANYA LAPORAN =====
+      // ===== AKSI 4: REKAP BULANAN =====
+      } else if (data.action === "rekap_bulanan") {
+        const doc = await getDoc(sheetId);
+        const sheetTransaksi = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
+        const sheetKeuangan = doc.sheetsByTitle['keuangan'];
+        const sheetLaporan = doc.sheetsByTitle['laporan_bulanan'];
+
+        // Parse bulan yang diminta
+        const requested = parseBulanRequest(data.bulan);
+        const bulanLabel = `${BULAN_LABEL[requested.bulan]} ${requested.tahun}`;
+
+        // Filter transaksi berdasarkan bulan
+        const allRows = await sheetTransaksi.getRows();
+        const filtered = allRows.filter(row => {
+          const parsed = parseTimestampMonth(row.get('Timestamp'));
+          return parsed && parsed.bulan === requested.bulan && parsed.tahun === requested.tahun;
+        });
+
+        // Hitung total pemasukan & pengeluaran
+        let totalPemasukan = 0;
+        let totalPengeluaran = 0;
+        const kategoriMap = {};
+
+        filtered.forEach(row => {
+          const nominal = Number(row.get('Nominal')) || 0;
+          const tipe = (row.get('Tipe') || '').toLowerCase();
+          const kategori = row.get('Kategori') || 'lainnya';
+
+          if (tipe === 'pemasukan') {
+            totalPemasukan += nominal;
+          } else if (tipe === 'pengeluaran') {
+            totalPengeluaran += nominal;
+            kategoriMap[kategori] = (kategoriMap[kategori] || 0) + nominal;
+          }
+        });
+
+        const sisaCashflow = totalPemasukan - totalPengeluaran;
+        const tandaPlusMinus = sisaCashflow >= 0 ? '+' : '-';
+
+        // Breakdown pengeluaran per kategori
+        let kategoriText = '';
+        const sortedKategori = Object.entries(kategoriMap).sort((a, b) => b[1] - a[1]);
+        if (sortedKategori.length === 0) {
+          kategoriText = '• (Belum ada data pengeluaran)';
+        } else {
+          kategoriText = sortedKategori.map(([kat, nom]) => {
+            const persen = totalPengeluaran > 0 ? ((nom / totalPengeluaran) * 100).toFixed(1) : '0.0';
+            return `• ${kat} : ${formatRupiah(nom)} (${persen}%)`;
+          }).join('\n');
+        }
+
+        // Ambil posisi saldo dompet dari sheet keuangan
+        let saldoText = '';
+        if (sheetKeuangan) {
+          const keuanganRows = await sheetKeuangan.getRows();
+          if (keuanganRows.length > 0) {
+            saldoText = keuanganRows.map(row => {
+              const sumber = row.get('sumber') || row.get('Sumber') || '-';
+              const saldo = Number(row.get('total saldo tersedia') || row.get('Total_Saldo_Tersedia') || row.get('saldo') || 0);
+              return `• ${sumber} : ${formatRupiah(saldo)}`;
+            }).join('\n');
+          }
+        }
+        if (!saldoText) saldoText = '• (Sheet keuangan belum tersedia)';
+
+        // Simpan / Update ke sheet laporan_bulanan
+        let statusMessage = '';
+        if (sheetLaporan) {
+          const laporanRows = await sheetLaporan.getRows();
+          const existingRow = laporanRows.find(row => row.get('Bulan') === bulanLabel);
+          const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+
+          if (existingRow) {
+            existingRow.set('Pemasukan', totalPemasukan);
+            existingRow.set('Pengeluaran', totalPengeluaran);
+            existingRow.set('Cashflow', sisaCashflow);
+            existingRow.set('Terakhir_Diperbarui', timestamp);
+            await existingRow.save();
+            statusMessage = `Data laporan bulan ${bulanLabel} di update`;
+          } else {
+            await sheetLaporan.addRow({
+              Bulan: bulanLabel,
+              Pemasukan: totalPemasukan,
+              Pengeluaran: totalPengeluaran,
+              Cashflow: sisaCashflow,
+              Terakhir_Diperbarui: timestamp
+            });
+            statusMessage = `Data laporan ${bulanLabel} berhasil di simpan`;
+          }
+        } else {
+          statusMessage = 'Sheet laporan_bulanan belum tersedia, data tidak disimpan';
+        }
+
+        // Kirim balasan
+        const reply = `📊 *LAPORAN KEUANGAN - ${bulanLabel.toUpperCase()}*\n\n` +
+          `💰 Total Pemasukan  : ${formatRupiah(totalPemasukan)}\n` +
+          `💸 Total Pengeluaran : ${formatRupiah(totalPengeluaran)}\n` +
+          `📈 Sisa Cashflow     : ${tandaPlusMinus}${formatRupiah(Math.abs(sisaCashflow))}\n\n` +
+          `🛍️ *Pengeluaran per Kategori:*\n${kategoriText}\n\n` +
+          `💳 *Posisi Saldo Dompet:*\n${saldoText}\n\n` +
+          `_${statusMessage}_`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI 5: TANYA LAPORAN =====
       } else if (data.action === "tanya") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const rows = await sheet.getRows();
