@@ -88,19 +88,21 @@ function parseBulanRequest(bulanStr) {
   return { bulan: now.getMonth() + 1, tahun: now.getFullYear() };
 }
 
-// Helper: Format Rupiah
-function formatRupiah(nominal) {
-  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(nominal);
-}
-
-// Helper: Bersihkan string angka dari format mata uang ("Rp100.000", "-Rp92.000", dll)
-function parseNominal(val) {
+// Helper: Bersihkan string angka dari format mata uang Rupiah
+function parseRupiah(val) {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;
-  // Hapus semua karakter selain angka dan tanda minus (-)
+  // Hapus "Rp", tanda titik, spasi, dan karakter non-angka kecuali minus (-)
   const cleaned = val.toString().replace(/[^0-9-]/g, '');
   const parsed = parseFloat(cleaned);
   return isNaN(parsed) ? 0 : parsed;
+}
+
+// Helper: Format Rupiah
+function formatRupiah(val) {
+  const nominal = parseRupiah(val);
+  const prefix = nominal < 0 ? "-Rp " : "Rp ";
+  return prefix + Math.abs(nominal).toLocaleString('id-ID');
 }
 // System Prompt untuk ekstraksi JSON (dari instruksi user)
 const EXTRACTION_PROMPT = `Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
@@ -110,8 +112,9 @@ Kategori 'action' yang tersedia:
 2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya (contoh: "edit transaksi tadi harusnya 15rb dari dana", "eh salah tadi harusnya 20rb dari cash", "revisi transaksi terakhir").
 3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu (contoh: "sesuaikan update untuk sumber dari cash harusnya pemasukan 300rb pengeluaran 0").
 4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan (contoh: "rekap pengeluaran", "laporan keuangan bulan ini", "rekap agustus", "laporan bulan juli").
-5. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
-6. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+5. "cek_pinjaman" -> Jika pengguna ingin mengecek status pinjaman, utang, atau piutang (contoh: "cek utang", "berapa utang galih", "status pinjaman").
+6. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
+7. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
 
 Aturan Ekstraksi JSON:
 
@@ -152,10 +155,13 @@ D. Jika action = "rekap_bulanan":
    - 'bulan': nama bulan dan tahun yang diminta (misal: "Agustus 2026"). Jika pengguna tidak menyebutkan bulan spesifik, gunakan bulan saat ini.
    - 'is_transaction': false
 
-E. Jika action = "tanya":
+E. Jika action = "cek_pinjaman":
+   - 'is_transaction': false
+
+F. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-F. Jika action = "chat":
+G. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
 Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
@@ -174,7 +180,7 @@ module.exports = {
 
     const prompt = args.join(" ");
     if (!prompt) {
-      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
+      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Pinjaman*: >asisten cek utang galih\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
       return;
     }
 
@@ -359,7 +365,7 @@ module.exports = {
         const kategoriMap = {};
 
         filtered.forEach(row => {
-          const nominal = parseNominal(row.get('Nominal'));
+          const nominal = parseRupiah(row.get('Nominal'));
           const tipe = (row.get('Tipe') || '').toLowerCase();
           const kategori = row.get('Kategori') || 'lainnya';
 
@@ -399,7 +405,7 @@ module.exports = {
               saldoText = validRows.map(row => {
                 const sumber = row.get('sumber') || row.get('Sumber') || '-';
                 const rawSaldo = row.get('total saldo tersedia') || row.get('Total_Saldo_Tersedia') || row.get('saldo') || '0';
-                const nominalSaldo = parseNominal(rawSaldo);
+                const nominalSaldo = parseRupiah(rawSaldo);
                 const formattedSaldo = (nominalSaldo < 0 ? '-' : '') + formatRupiah(Math.abs(nominalSaldo));
                 return `• ${sumber} : ${formattedSaldo}`;
               }).join('\n');
@@ -447,7 +453,46 @@ module.exports = {
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
-      // ===== AKSI 5: TANYA LAPORAN =====
+      // ===== AKSI 5: CEK PINJAMAN =====
+      } else if (data.action === "cek_pinjaman") {
+        const doc = await getDoc(sheetId);
+        const sheetPinjaman = doc.sheetsByTitle['pinjaman'] || doc.sheetsByTitle['Pinjaman'];
+        
+        if (!sheetPinjaman) {
+          await sock.sendMessage(from, { text: "Sheet 'pinjaman' belum tersedia." }, { quoted: msg });
+          return;
+        }
+
+        const rows = await sheetPinjaman.getRows();
+        const validRows = rows.filter(row => {
+          const nama = row.get('nama') || row.get('Nama');
+          return nama && nama.trim() !== '';
+        });
+
+        if (validRows.length === 0) {
+          await sock.sendMessage(from, { text: "Belum ada data pinjaman." }, { quoted: msg });
+          return;
+        }
+
+        let replyText = "📋 *STATUS PINJAMAN & PIUTANG*\n";
+        
+        validRows.forEach(row => {
+          const nama = row.get('nama') || row.get('Nama');
+          const pinjaman = row.get('pinjaman') || row.get('Pinjaman') || '0';
+          const pembayaran = row.get('pembayaran') || row.get('Pembayaran') || '0';
+          const sisa = row.get('sisa') || row.get('Sisa') || '0';
+          const status = row.get('status') || row.get('keterangan') || row.get('Status') || row.get('Keterangan') || '-';
+
+          replyText += `\n• *${nama}*\n` +
+            `  - Total Pinjaman : ${formatRupiah(pinjaman)}\n` +
+            `  - Sudah Dibayar  : ${formatRupiah(pembayaran)}\n` +
+            `  - Sisa Piutang   : ${formatRupiah(sisa)}\n` +
+            `  - Status         : ${status}\n`;
+        });
+
+        await sock.sendMessage(from, { text: replyText }, { quoted: msg });
+
+      // ===== AKSI 6: TANYA LAPORAN =====
       } else if (data.action === "tanya") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const rows = await sheet.getRows();
