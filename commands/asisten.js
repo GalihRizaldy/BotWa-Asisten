@@ -93,6 +93,15 @@ function formatRupiah(nominal) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(nominal);
 }
 
+// Helper: Bersihkan string angka dari format mata uang ("Rp100.000", "-Rp92.000", dll)
+function parseNominal(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return val;
+  // Hapus semua karakter selain angka dan tanda minus (-)
+  const cleaned = val.toString().replace(/[^0-9-]/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
+}
 // System Prompt untuk ekstraksi JSON (dari instruksi user)
 const EXTRACTION_PROMPT = `Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
 
@@ -350,7 +359,7 @@ module.exports = {
         const kategoriMap = {};
 
         filtered.forEach(row => {
-          const nominal = Number(row.get('Nominal')) || 0;
+          const nominal = parseNominal(row.get('Nominal'));
           const tipe = (row.get('Tipe') || '').toLowerCase();
           const kategori = row.get('Kategori') || 'lainnya';
 
@@ -382,11 +391,19 @@ module.exports = {
         if (sheetKeuangan) {
           const keuanganRows = await sheetKeuangan.getRows();
           if (keuanganRows.length > 0) {
-            saldoText = keuanganRows.map(row => {
-              const sumber = row.get('sumber') || row.get('Sumber') || '-';
-              const saldo = Number(row.get('total saldo tersedia') || row.get('Total_Saldo_Tersedia') || row.get('saldo') || 0);
-              return `• ${sumber} : ${formatRupiah(saldo)}`;
-            }).join('\n');
+            const validRows = keuanganRows.filter(row => {
+              const sumber = row.get('sumber') || row.get('Sumber') || '';
+              return sumber && sumber.trim() !== '' && sumber.trim() !== '-';
+            });
+            if (validRows.length > 0) {
+              saldoText = validRows.map(row => {
+                const sumber = row.get('sumber') || row.get('Sumber') || '-';
+                const rawSaldo = row.get('total saldo tersedia') || row.get('Total_Saldo_Tersedia') || row.get('saldo') || '0';
+                const nominalSaldo = parseNominal(rawSaldo);
+                const formattedSaldo = (nominalSaldo < 0 ? '-' : '') + formatRupiah(Math.abs(nominalSaldo));
+                return `• ${sumber} : ${formattedSaldo}`;
+              }).join('\n');
+            }
           }
         }
         if (!saldoText) saldoText = '• (Sheet keuangan belum tersedia)';
