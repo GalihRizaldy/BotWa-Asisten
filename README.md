@@ -1,6 +1,6 @@
 # Bot WA Asisten Keuangan Pribadi (bot-wa-finansial) 🤖💰
 
-![Version](https://img.shields.io/badge/version-0.1.15-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.16-blue.svg)
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18.0.0-green.svg)
 ![Baileys](https://img.shields.io/badge/Baileys-WhatsApp_Engine-25D366.svg)
 ![Gemini AI](https://img.shields.io/badge/AI-Google_Gemini-4285F4.svg)

@@ -114,8 +114,12 @@ Kategori 'action' yang tersedia:
 4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan (contoh: "rekap pengeluaran", "laporan keuangan bulan ini", "rekap agustus", "laporan bulan juli").
 5. "cek_pinjaman" -> Jika pengguna ingin mengecek status pinjaman, utang, atau piutang (contoh: "cek utang", "berapa utang galih", "status pinjaman").
 6. "batal_transaksi" -> Jika pengguna mengirim perintah pembatalan atau penghapusan transaksi terakhir (contoh: "batal", "undo", "hapus transaksi tadi", "cancel transaksi terakhir", "salah input hapus barusan").
-7. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
-8. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+7. "tambah_langganan" -> Jika pengguna mendaftarkan langganan atau tagihan rutin baru (contoh: "tambah langganan wifi 350rb tiap tgl 20 pake bca", "catat tagihan kosan 850rb tgl 1").
+8. "cek_langganan" -> Jika pengguna menanyakan daftar langganan atau tagihan rutin (contoh: "cek langganan", "daftar tagihan rutin", "apa saja langganan saya?").
+9. "bayar_langganan" -> Jika pengguna membayar tagihan langganan yang sudah terdaftar (contoh: "bayar wifi indihome", "bayar netflix").
+10. "hapus_langganan" -> Jika pengguna ingin menonaktifkan atau menghapus langganan (contoh: "hapus langganan netflix", "stop spotify").
+11. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
+12. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
 
 Aturan Ekstraksi JSON:
 
@@ -162,10 +166,29 @@ E. Jika action = "cek_pinjaman":
 F. Jika action = "batal_transaksi":
    - 'is_transaction': false
 
-G. Jika action = "tanya":
+G. Jika action = "tambah_langganan":
+   - 'nama_layanan': nama layanan/tagihan (misal: "WiFi Indihome", "Netflix", "Kos")
+   - 'nominal': angka nominal tagihan (integer)
+   - 'tanggal_jatuh_tempo': tanggal jatuh tempo per bulan (1-31)
+   - 'sumber_default': nama dompet/sumber pembayaran default (misal: "bca", "dana", "cash"). Default "cash" jika tidak disebutkan.
+   - 'kategori': kategori tagihan (misal: "kebutuhan", "hiburan", "internet")
+   - 'is_transaction': false
+
+H. Jika action = "cek_langganan":
+   - 'is_transaction': false
+
+I. Jika action = "bayar_langganan":
+   - 'nama_layanan': nama layanan yang dibayar (misal: "wifi indihome", "netflix")
+   - 'is_transaction': false
+
+J. Jika action = "hapus_langganan":
+   - 'nama_layanan': nama layanan yang ingin dihapus/dinonaktifkan (misal: "netflix", "spotify")
+   - 'is_transaction': false
+
+K. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-H. Jika action = "chat":
+L. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
 Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
@@ -184,7 +207,7 @@ module.exports = {
 
     const prompt = args.join(" ");
     if (!prompt) {
-      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Batal*: >asisten batal\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Pinjaman*: >asisten cek utang galih\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
+      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Batal*: >asisten batal\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Pinjaman*: >asisten cek utang galih\n- *Langganan*: >asisten tambah langganan wifi 350rb tgl 20\n- *Bayar*: >asisten bayar wifi indihome\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
       return;
     }
 
@@ -537,7 +560,164 @@ module.exports = {
 
         await sock.sendMessage(from, { text: replyText }, { quoted: msg });
 
-      // ===== AKSI 6: TANYA LAPORAN =====
+      // ===== AKSI 6: TAMBAH LANGGANAN =====
+      } else if (data.action === "tambah_langganan") {
+        const doc = await getDoc(sheetId);
+        let sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
+
+        if (!sheetLangganan) {
+          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia. Silakan buat sheet bernama 'langganan' dengan kolom: nama_layanan, nominal, tanggal_jatuh_tempo, sumber_default, kategori, status." }, { quoted: msg });
+          return;
+        }
+
+        const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        await sheetLangganan.addRow({
+          nama_layanan: data.nama_layanan,
+          nominal: data.nominal,
+          tanggal_jatuh_tempo: data.tanggal_jatuh_tempo,
+          sumber_default: data.sumber_default || 'cash',
+          kategori: data.kategori || 'kebutuhan',
+          status: 'aktif',
+          ditambahkan: timestamp
+        });
+
+        const reply = `📌 *LANGGANAN BERHASIL DITAMBAHKAN*\n\n` +
+          `• Layanan     : ${data.nama_layanan}\n` +
+          `• Nominal     : ${formatRupiah(data.nominal)}\n` +
+          `• Jatuh Tempo : Tanggal ${data.tanggal_jatuh_tempo} setiap bulan\n` +
+          `• Sumber      : ${data.sumber_default || 'cash'}\n` +
+          `• Kategori    : ${data.kategori || 'kebutuhan'}\n\n` +
+          `_Bot akan mengingatkan Anda H-2 sebelum jatuh tempo._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI 7: CEK LANGGANAN =====
+      } else if (data.action === "cek_langganan") {
+        const doc = await getDoc(sheetId);
+        const sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
+
+        if (!sheetLangganan) {
+          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia." }, { quoted: msg });
+          return;
+        }
+
+        const rows = await sheetLangganan.getRows();
+        const aktifRows = rows.filter(row => {
+          const status = (row.get('status') || row.get('Status') || '').toLowerCase();
+          return status === 'aktif';
+        });
+
+        if (aktifRows.length === 0) {
+          await sock.sendMessage(from, { text: "Belum ada langganan aktif." }, { quoted: msg });
+          return;
+        }
+
+        let totalBeban = 0;
+        let replyText = "📋 *DAFTAR LANGGANAN & TAGIHAN RUTIN*\n";
+
+        aktifRows.forEach(row => {
+          const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || '-';
+          const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || '0');
+          const tgl = row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '-';
+          const sumber = row.get('sumber_default') || row.get('Sumber_Default') || 'cash';
+
+          totalBeban += nominal;
+          replyText += `\n• *${nama}*\n` +
+            `  - Nominal     : ${formatRupiah(nominal)}\n` +
+            `  - Jatuh Tempo : Tanggal ${tgl}\n` +
+            `  - Sumber      : ${sumber}\n`;
+        });
+
+        replyText += `\n💰 *Total Beban Bulanan: ${formatRupiah(totalBeban)}*`;
+
+        await sock.sendMessage(from, { text: replyText }, { quoted: msg });
+
+      // ===== AKSI 8: BAYAR LANGGANAN =====
+      } else if (data.action === "bayar_langganan") {
+        const doc = await getDoc(sheetId);
+        const sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
+
+        if (!sheetLangganan) {
+          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia." }, { quoted: msg });
+          return;
+        }
+
+        const rows = await sheetLangganan.getRows();
+        const namaTarget = (data.nama_layanan || '').toLowerCase();
+        const found = rows.find(row => {
+          const nama = (row.get('nama_layanan') || row.get('Nama_Layanan') || '').toLowerCase();
+          const status = (row.get('status') || row.get('Status') || '').toLowerCase();
+          return nama.includes(namaTarget) && status === 'aktif';
+        });
+
+        if (!found) {
+          await sock.sendMessage(from, { text: `⚠️ Langganan "${data.nama_layanan}" tidak ditemukan atau sudah nonaktif.` }, { quoted: msg });
+          return;
+        }
+
+        // Ambil data langganan
+        const namaLayanan = found.get('nama_layanan') || found.get('Nama_Layanan');
+        const nominal = parseRupiah(found.get('nominal') || found.get('Nominal') || '0');
+        const kategori = found.get('kategori') || found.get('Kategori') || 'kebutuhan';
+        const sumber = found.get('sumber_default') || found.get('Sumber_Default') || 'cash';
+
+        // Catat ke sheet transaksi
+        const sheetTransaksi = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
+        const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+
+        await sheetTransaksi.addRow({
+          Timestamp: timestamp,
+          WA_ID: waId.split('@')[0],
+          Tipe: 'pengeluaran',
+          Kategori: kategori,
+          Keterangan: `Bayar ${namaLayanan}`,
+          Nominal: nominal,
+          Sumber: sumber
+        });
+
+        const reply = `✅ *TAGIHAN BERHASIL DIBAYAR*\n\n` +
+          `• Layanan  : ${namaLayanan}\n` +
+          `• Nominal  : ${formatRupiah(nominal)}\n` +
+          `• Sumber   : ${sumber}\n` +
+          `• Kategori : ${kategori}\n\n` +
+          `_Sudah otomatis tercatat sebagai pengeluaran di sheet transaksi._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI 9: HAPUS LANGGANAN =====
+      } else if (data.action === "hapus_langganan") {
+        const doc = await getDoc(sheetId);
+        const sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
+
+        if (!sheetLangganan) {
+          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia." }, { quoted: msg });
+          return;
+        }
+
+        const rows = await sheetLangganan.getRows();
+        const namaTarget = (data.nama_layanan || '').toLowerCase();
+        const found = rows.find(row => {
+          const nama = (row.get('nama_layanan') || row.get('Nama_Layanan') || '').toLowerCase();
+          const status = (row.get('status') || row.get('Status') || '').toLowerCase();
+          return nama.includes(namaTarget) && status === 'aktif';
+        });
+
+        if (!found) {
+          await sock.sendMessage(from, { text: `⚠️ Langganan "${data.nama_layanan}" tidak ditemukan atau sudah nonaktif.` }, { quoted: msg });
+          return;
+        }
+
+        const namaLayanan = found.get('nama_layanan') || found.get('Nama_Layanan');
+        found.set('status', 'nonaktif');
+        await found.save();
+
+        const reply = `🚫 *LANGGANAN DIHAPUS*\n\n` +
+          `Layanan *${namaLayanan}* telah dinonaktifkan.\n` +
+          `_Anda tidak akan menerima pengingat untuk tagihan ini lagi._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI 10: TANYA LAPORAN =====
       } else if (data.action === "tanya") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const rows = await sheet.getRows();

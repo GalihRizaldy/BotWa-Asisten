@@ -11,6 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const { createLogger, withRetry, ...config } = require("./utils");
+const { startSubscriptionReminder } = require("./subscriptionReminder");
 
 // Logging via pino
 const baseLogger = pino({
@@ -77,6 +78,9 @@ async function startBot() {
         sock.ev.on(eventName, handler(sock, logger));
       }
     }
+
+    // Start subscription reminder cron job
+    startSubscriptionReminder(sock);
   } catch (error) {
     logger.error("Failed to start bot", { error: error.message, stack: error.stack });
     setTimeout(startBot, 5000);
