@@ -113,8 +113,9 @@ Kategori 'action' yang tersedia:
 3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu (contoh: "sesuaikan update untuk sumber dari cash harusnya pemasukan 300rb pengeluaran 0").
 4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan (contoh: "rekap pengeluaran", "laporan keuangan bulan ini", "rekap agustus", "laporan bulan juli").
 5. "cek_pinjaman" -> Jika pengguna ingin mengecek status pinjaman, utang, atau piutang (contoh: "cek utang", "berapa utang galih", "status pinjaman").
-6. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
-7. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+6. "batal_transaksi" -> Jika pengguna mengirim perintah pembatalan atau penghapusan transaksi terakhir (contoh: "batal", "undo", "hapus transaksi tadi", "cancel transaksi terakhir", "salah input hapus barusan").
+7. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
+8. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
 
 Aturan Ekstraksi JSON:
 
@@ -158,10 +159,13 @@ D. Jika action = "rekap_bulanan":
 E. Jika action = "cek_pinjaman":
    - 'is_transaction': false
 
-F. Jika action = "tanya":
+F. Jika action = "batal_transaksi":
+   - 'is_transaction': false
+
+G. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-G. Jika action = "chat":
+H. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
 Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
@@ -180,7 +184,7 @@ module.exports = {
 
     const prompt = args.join(" ");
     if (!prompt) {
-      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Pinjaman*: >asisten cek utang galih\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
+      await sock.sendMessage(from, { text: "Mau ngapain? Contoh:\n- *Catat*: >asisten beli mie gacoan 15rb cash\n- *Batal*: >asisten batal\n- *Edit*: >asisten eh salah tadi harusnya 20rb\n- *Koreksi*: >asisten update saldo cash pemasukan 300rb\n- *Rekap*: >asisten rekap bulan ini\n- *Pinjaman*: >asisten cek utang galih\n- *Tanya*: >asisten berapa total pengeluaran hari ini?\n- *Chat*: >asisten halo selamat malam" }, { quoted: msg });
       return;
     }
 
@@ -227,7 +231,48 @@ module.exports = {
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
-      // ===== AKSI 2: EDIT TRANSAKSI TERAKHIR =====
+      // ===== AKSI 2: BATALKAN TRANSAKSI TERAKHIR =====
+      } else if (data.action === "batal_transaksi") {
+        const sheet = await getSheet(sheetId, 'transaksi');
+        const rows = await sheet.getRows();
+        const userId = waId.split('@')[0];
+
+        // Cari transaksi terakhir milik user ini
+        let lastRow = null;
+        for (let i = rows.length - 1; i >= 0; i--) {
+          if (rows[i].get('WA_ID') === userId) {
+            lastRow = rows[i];
+            break;
+          }
+        }
+
+        if (!lastRow) {
+          await sock.sendMessage(from, { text: "⚠️ Tidak ada riwayat transaksi yang bisa dibatalkan." }, { quoted: msg });
+          return;
+        }
+
+        // Simpan data lama untuk ditampilkan
+        const oldData = {
+          tipe: lastRow.get('Tipe') || '-',
+          keterangan: lastRow.get('Keterangan') || '-',
+          nominal: Number(lastRow.get('Nominal')) || 0,
+          sumber: lastRow.get('Sumber') || '-'
+        };
+
+        // Hapus baris tersebut
+        await lastRow.delete();
+
+        const reply = `🗑️ *TRANSAKSI BERHASIL DIBATALKAN*\n\n` +
+          `Detail transaksi yang dihapus:\n` +
+          `• Keterangan : ${oldData.keterangan}\n` +
+          `• Tipe       : ${oldData.tipe.toUpperCase()}\n` +
+          `• Nominal    : Rp ${Math.abs(oldData.nominal).toLocaleString('id-ID')}\n` +
+          `• Sumber     : ${oldData.sumber}\n\n` +
+          `_Data telah dihapus dari sheet transaksi dan saldo otomatis menyesuaikan._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI 3: EDIT TRANSAKSI TERAKHIR =====
       } else if (data.action === "edit_transaksi_terakhir") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const rows = await sheet.getRows();
