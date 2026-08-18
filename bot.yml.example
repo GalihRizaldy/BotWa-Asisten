@@ -8,6 +8,7 @@ bot:
   history: false                # Enable/disable chat history
   gemini_api_key: ""            # Isi dengan API Key dari https://aistudio.google.com/app/apikey
   spreadsheet_id: ""            # Isi dengan ID Google Spreadsheet Anda
+  owner_number: ""              # Nomor WA Anda (misal: "628123456789") ATAU ID Grup (misal: "1234567890@g.us")
 
 # =====================
 # Logging

@@ -65,32 +65,61 @@ function startSubscriptionReminder(sock) {
       // Tanggal hari ini (WIB)
       const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
       const hariIni = now.getDate();
+      const bulanIni = now.getMonth() + 1; // 1-12
+      const namaHariIni = now.toLocaleDateString('id-ID', { weekday: 'long', timeZone: 'Asia/Jakarta' }).toLowerCase();
 
       const reminders = [];
+
+      // Fungsi helper untuk menghitung selisih hari
+      const getDaysDiff = (targetDate, targetMonth) => {
+        const target = new Date(now.getFullYear(), targetMonth - 1, targetDate);
+        const diffTime = target - now;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return diffDays;
+      };
 
       aktifRows.forEach(row => {
         const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || '-';
         const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || '0');
-        const tglJatuhTempo = parseInt(row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '0');
+        const frekuensi = (row.get('frekuensi') || row.get('Frekuensi') || 'bulanan').toLowerCase();
+        const tglStr = (row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '').toString().toLowerCase();
 
-        if (tglJatuhTempo === 0) return;
-
-        // Cek jatuh tempo hari ini atau H-2
-        const selisih = tglJatuhTempo - hariIni;
-        if (selisih === 0) {
-          reminders.push({
-            nama,
-            nominal,
-            tgl: tglJatuhTempo,
-            type: 'HARI INI'
-          });
-        } else if (selisih === 2 || selisih === 1) {
-          reminders.push({
-            nama,
-            nominal,
-            tgl: tglJatuhTempo,
-            type: `H-${selisih}`
-          });
+        if (frekuensi === 'harian') {
+          reminders.push({ nama, nominal, tgl: 'Setiap Hari', type: 'HARI INI' });
+        } 
+        else if (frekuensi === 'mingguan') {
+          if (tglStr === namaHariIni) {
+            reminders.push({ nama, nominal, tgl: `Setiap ${tglStr}`, type: 'HARI INI' });
+          }
+        } 
+        else if (frekuensi === 'bulanan') {
+          const tglJatuhTempo = parseInt(tglStr);
+          if (tglJatuhTempo) {
+            const selisih = tglJatuhTempo - hariIni;
+            if (selisih === 0) {
+              reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: 'HARI INI' });
+            } else if (selisih === 1 || selisih === 2) {
+              reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: `H-${selisih}` });
+            }
+          }
+        } 
+        else if (frekuensi === 'tahunan') {
+          // Format DD/MM (contoh: 15/08)
+          const parts = tglStr.split('/');
+          if (parts.length === 2) {
+            const tgl = parseInt(parts[0]);
+            const bln = parseInt(parts[1]);
+            
+            // Hitung selisih hari ini ke target
+            if (bln === bulanIni) {
+               const selisih = tgl - hariIni;
+               if (selisih === 0) {
+                 reminders.push({ nama, nominal, tgl: tglStr, type: 'HARI INI' });
+               } else if (selisih === 1 || selisih === 2) {
+                 reminders.push({ nama, nominal, tgl: tglStr, type: `H-${selisih}` });
+               }
+            }
+          }
         }
       });
 
@@ -101,7 +130,16 @@ function startSubscriptionReminder(sock) {
 
       // Kirim pengingat
       // Tentukan tujuan pengiriman: owner atau grup tertentu
-      const target = ownerNumber ? `${ownerNumber}@s.whatsapp.net` : null;
+      let target = null;
+      if (ownerNumber) {
+        // Jika ownerNumber sudah mengandung suffix (seperti @g.us atau @lid), gunakan langsung
+        if (ownerNumber.toString().includes('@')) {
+          target = ownerNumber.toString();
+        } else {
+          // Fallback ke nomor HP biasa
+          target = `${ownerNumber}@s.whatsapp.net`;
+        }
+      }
 
       if (!target) {
         console.log('[CRON] owner_number belum diatur di bot.yml, reminder tidak dikirim.');

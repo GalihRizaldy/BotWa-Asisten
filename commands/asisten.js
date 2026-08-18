@@ -169,7 +169,8 @@ F. Jika action = "batal_transaksi":
 G. Jika action = "tambah_langganan":
    - 'nama_layanan': nama layanan/tagihan (misal: "WiFi Indihome", "Netflix", "Kos")
    - 'nominal': angka nominal tagihan (integer)
-   - 'tanggal_jatuh_tempo': tanggal jatuh tempo per bulan (1-31)
+   - 'frekuensi': "harian" | "mingguan" | "bulanan" | "tahunan"
+   - 'tanggal_jatuh_tempo': tanggal/waktu jatuh tempo. Jika harian isikan "-". Jika mingguan isikan nama hari ("Senin"). Jika bulanan isikan tanggal ("20"). Jika tahunan isikan DD/MM ("15/08").
    - 'sumber_default': nama dompet/sumber pembayaran default (misal: "bca", "dana", "cash"). Default "cash" jika tidak disebutkan.
    - 'kategori': kategori tagihan (misal: "kebutuhan", "hiburan", "internet")
    - 'is_transaction': false
@@ -566,7 +567,7 @@ module.exports = {
         let sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
 
         if (!sheetLangganan) {
-          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia. Silakan buat sheet bernama 'langganan' dengan kolom: nama_layanan, nominal, tanggal_jatuh_tempo, sumber_default, kategori, status." }, { quoted: msg });
+          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia. Silakan buat sheet bernama 'langganan' dengan kolom: nama_layanan, nominal, frekuensi, tanggal_jatuh_tempo, sumber_default, kategori, status." }, { quoted: msg });
           return;
         }
 
@@ -574,6 +575,7 @@ module.exports = {
         await sheetLangganan.addRow({
           nama_layanan: data.nama_layanan,
           nominal: data.nominal,
+          frekuensi: data.frekuensi || 'bulanan',
           tanggal_jatuh_tempo: data.tanggal_jatuh_tempo,
           sumber_default: data.sumber_default || 'cash',
           kategori: data.kategori || 'kebutuhan',
@@ -581,13 +583,20 @@ module.exports = {
           ditambahkan: timestamp
         });
 
+        let tempoText = '';
+        if (data.frekuensi === 'harian') tempoText = 'Setiap Hari';
+        else if (data.frekuensi === 'mingguan') tempoText = `Setiap Hari ${data.tanggal_jatuh_tempo}`;
+        else if (data.frekuensi === 'tahunan') tempoText = `Setiap Tanggal ${data.tanggal_jatuh_tempo} per tahun`;
+        else tempoText = `Tanggal ${data.tanggal_jatuh_tempo} setiap bulan`;
+
         const reply = `📌 *LANGGANAN BERHASIL DITAMBAHKAN*\n\n` +
           `• Layanan     : ${data.nama_layanan}\n` +
           `• Nominal     : ${formatRupiah(data.nominal)}\n` +
-          `• Jatuh Tempo : Tanggal ${data.tanggal_jatuh_tempo} setiap bulan\n` +
+          `• Frekuensi   : ${data.frekuensi || 'bulanan'}\n` +
+          `• Jatuh Tempo : ${tempoText}\n` +
           `• Sumber      : ${data.sumber_default || 'cash'}\n` +
           `• Kategori    : ${data.kategori || 'kebutuhan'}\n\n` +
-          `_Bot akan mengingatkan Anda H-2 sebelum jatuh tempo._`;
+          `_Bot akan mengingatkan Anda saat jatuh tempo._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
@@ -618,17 +627,27 @@ module.exports = {
         aktifRows.forEach(row => {
           const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || '-';
           const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || '0');
+          const frekuensi = row.get('frekuensi') || row.get('Frekuensi') || 'bulanan';
           const tgl = row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '-';
           const sumber = row.get('sumber_default') || row.get('Sumber_Default') || 'cash';
 
-          totalBeban += nominal;
-          replyText += `\n• *${nama}*\n` +
-            `  - Nominal     : ${formatRupiah(nominal)}\n` +
-            `  - Jatuh Tempo : Tanggal ${tgl}\n` +
+          if (frekuensi === 'bulanan') totalBeban += nominal;
+          else if (frekuensi === 'harian') totalBeban += (nominal * 30);
+          else if (frekuensi === 'mingguan') totalBeban += (nominal * 4);
+          else if (frekuensi === 'tahunan') totalBeban += Math.floor(nominal / 12);
+
+          let tempoLabel = '';
+          if (frekuensi === 'harian') tempoLabel = 'Setiap Hari';
+          else if (frekuensi === 'mingguan') tempoLabel = `Tiap ${tgl}`;
+          else if (frekuensi === 'tahunan') tempoLabel = `Tgl ${tgl}`;
+          else tempoLabel = `Tgl ${tgl}`;
+
+          replyText += `\n• *${nama}* : ${formatRupiah(nominal)} / ${frekuensi}\n` +
+            `  - Jatuh Tempo : ${tempoLabel}\n` +
             `  - Sumber      : ${sumber}\n`;
         });
 
-        replyText += `\n💰 *Total Beban Bulanan: ${formatRupiah(totalBeban)}*`;
+        replyText += `\n💰 *Total Estimasi Beban Bulanan: ${formatRupiah(totalBeban)}*`;
 
         await sock.sendMessage(from, { text: replyText }, { quoted: msg });
 
