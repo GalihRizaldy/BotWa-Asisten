@@ -202,20 +202,28 @@ async function runReminderCheck(sock, debugTarget = null) {
   }
 }
 
-// Tracker agar cron tidak duplikat saat bot reconnect
-let cronStarted = false;
+// Simpan referensi sock yang bisa di-update saat reconnect
+let currentSock = null;
+let cronTask = null;
 
 function startSubscriptionReminder(sock) {
-  if (cronStarted) {
-    console.log('[CRON] Cron sudah aktif, skip duplikat.');
+  // Selalu update sock ke yang terbaru
+  currentSock = sock;
+
+  // Jika cron sudah pernah dibuat, cukup update sock saja (jangan buat cron baru)
+  if (cronTask) {
+    console.log('[CRON] Sock diperbarui (reconnect). Cron tetap berjalan.');
     return;
   }
-  cronStarted = true;
 
   // Cron: setiap hari jam 09:00 WIB
-  cron.schedule('0 9 * * *', async () => {
+  cronTask = cron.schedule('0 9 * * *', async () => {
     console.log('[CRON] Menjalankan cek tagihan langganan...');
-    await runReminderCheck(sock);
+    if (!currentSock) {
+      console.log('[CRON] Sock belum tersedia, skip.');
+      return;
+    }
+    await runReminderCheck(currentSock);
   }, {
     scheduled: true,
     timezone: 'Asia/Jakarta'
