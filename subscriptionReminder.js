@@ -26,138 +26,196 @@ function formatRupiah(val) {
   return prefix + Math.abs(nominal).toLocaleString('id-ID');
 }
 
-function startSubscriptionReminder(sock) {
+/**
+ * Fungsi utama: cek langganan & kirim reminder.
+ * Bisa dipanggil dari cron maupun dari command test_cron.
+ * @param {object} sock - Baileys socket
+ * @param {string|null} debugTarget - Jika diisi, kirim laporan debug ke JID ini (untuk testing)
+ */
+async function runReminderCheck(sock, debugTarget = null) {
   const sheetId = config.bot?.spreadsheet_id;
-  const ownerNumber = config.bot?.owner_number; // Nomor WA owner (misal: "6281234567890")
+  const ownerNumber = config.bot?.owner_number;
+  const logs = []; // Kumpulkan log untuk debug
+
+  logs.push(`[1/6] Mulai cek langganan...`);
+  logs.push(`[2/6] Spreadsheet ID: ${sheetId ? 'OK' : 'TIDAK ADA'}`);
+  logs.push(`[2/6] Owner Number: ${ownerNumber || 'TIDAK ADA'}`);
 
   if (!sheetId) {
-    console.log('[CRON] Spreadsheet ID belum diatur, reminder dinonaktifkan.');
+    logs.push(`[GAGAL] spreadsheet_id belum diatur di bot.yml.`);
+    if (debugTarget) await sock.sendMessage(debugTarget, { text: logs.join('\n') });
     return;
   }
 
+  try {
+    const serviceAccountAuth = new JWT({
+      email: creds.client_email,
+      key: creds.private_key,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    const doc = new GoogleSpreadsheet(sheetId, serviceAccountAuth);
+    await doc.loadInfo();
+    logs.push(`[3/6] Google Sheets terhubung: "${doc.title}"`);
+
+    const sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
+    if (!sheetLangganan) {
+      logs.push(`[GAGAL] Sheet 'langganan' tidak ditemukan.`);
+      if (debugTarget) await sock.sendMessage(debugTarget, { text: logs.join('\n') });
+      return;
+    }
+
+    const rows = await sheetLangganan.getRows();
+    const aktifRows = rows.filter(row => {
+      const status = (row.get('status') || row.get('Status') || '').toLowerCase();
+      return status === 'aktif';
+    });
+
+    logs.push(`[4/6] Total baris: ${rows.length}, Aktif: ${aktifRows.length}`);
+
+    if (aktifRows.length === 0) {
+      logs.push(`[SELESAI] Tidak ada langganan aktif.`);
+      if (debugTarget) await sock.sendMessage(debugTarget, { text: logs.join('\n') });
+      return;
+    }
+
+    // Tanggal hari ini (WIB)
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+    const hariIni = now.getDate();
+    const bulanIni = now.getMonth() + 1;
+    const namaHariIni = now.toLocaleDateString('id-ID', { weekday: 'long', timeZone: 'Asia/Jakarta' }).toLowerCase();
+
+    logs.push(`[5/6] Hari ini: ${namaHariIni}, Tanggal: ${hariIni}, Bulan: ${bulanIni}`);
+
+    const reminders = [];
+
+    aktifRows.forEach(row => {
+      const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || '-';
+      const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || '0');
+      const frekuensi = (row.get('frekuensi') || row.get('Frekuensi') || 'bulanan').toLowerCase();
+      const tglStr = (row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '').toString().toLowerCase();
+
+      logs.push(`  -> "${nama}" | frekuensi=${frekuensi} | jatuh_tempo=${tglStr} | nominal=${nominal}`);
+
+      if (frekuensi === 'harian') {
+        reminders.push({ nama, nominal, tgl: 'Setiap Hari', type: 'HARI INI' });
+        logs.push(`     COCOK (harian)`);
+      }
+      else if (frekuensi === 'mingguan') {
+        logs.push(`     Bandingkan hari: "${tglStr}" vs "${namaHariIni}"`);
+        if (tglStr === namaHariIni) {
+          reminders.push({ nama, nominal, tgl: `Setiap ${tglStr}`, type: 'HARI INI' });
+          logs.push(`     COCOK (mingguan)`);
+        } else {
+          logs.push(`     TIDAK COCOK`);
+        }
+      }
+      else if (frekuensi === 'bulanan') {
+        const tglJatuhTempo = parseInt(tglStr);
+        if (tglJatuhTempo) {
+          const selisih = tglJatuhTempo - hariIni;
+          logs.push(`     Selisih: ${tglJatuhTempo} - ${hariIni} = ${selisih}`);
+          if (selisih === 0) {
+            reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: 'HARI INI' });
+            logs.push(`     COCOK (hari ini)`);
+          } else if (selisih === 1 || selisih === 2) {
+            reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: `H-${selisih}` });
+            logs.push(`     COCOK (H-${selisih})`);
+          } else {
+            logs.push(`     TIDAK COCOK`);
+          }
+        }
+      }
+      else if (frekuensi === 'tahunan') {
+        const parts = tglStr.split('/');
+        if (parts.length === 2) {
+          const tgl = parseInt(parts[0]);
+          const bln = parseInt(parts[1]);
+          if (bln === bulanIni) {
+            const selisih = tgl - hariIni;
+            if (selisih === 0) {
+              reminders.push({ nama, nominal, tgl: tglStr, type: 'HARI INI' });
+              logs.push(`     COCOK (tahunan - hari ini)`);
+            } else if (selisih === 1 || selisih === 2) {
+              reminders.push({ nama, nominal, tgl: tglStr, type: `H-${selisih}` });
+              logs.push(`     COCOK (tahunan - H-${selisih})`);
+            } else {
+              logs.push(`     TIDAK COCOK (selisih=${selisih})`);
+            }
+          } else {
+            logs.push(`     TIDAK COCOK (bulan beda: ${bln} vs ${bulanIni})`);
+          }
+        }
+      } else {
+        logs.push(`     FREKUENSI TIDAK DIKENAL: "${frekuensi}"`);
+      }
+    });
+
+    logs.push(`[6/6] Total reminder yang cocok: ${reminders.length}`);
+
+    if (reminders.length === 0) {
+      logs.push(`[SELESAI] Tidak ada tagihan jatuh tempo hari ini.`);
+      console.log('[CRON] Tidak ada tagihan jatuh tempo hari ini / H-2.');
+      if (debugTarget) await sock.sendMessage(debugTarget, { text: logs.join('\n') });
+      return;
+    }
+
+    // Tentukan target pengiriman
+    let target = null;
+    if (ownerNumber) {
+      if (ownerNumber.toString().includes('@')) {
+        target = ownerNumber.toString();
+      } else {
+        target = `${ownerNumber}@s.whatsapp.net`;
+      }
+    }
+
+    if (!target) {
+      logs.push(`[GAGAL] owner_number belum diatur di bot.yml.`);
+      console.log('[CRON] owner_number belum diatur di bot.yml, reminder tidak dikirim.');
+      if (debugTarget) await sock.sendMessage(debugTarget, { text: logs.join('\n') });
+      return;
+    }
+
+    logs.push(`Target kirim: ${target}`);
+
+    // Kirim debug log terlebih dahulu (jika ada)
+    if (debugTarget) {
+      await sock.sendMessage(debugTarget, { text: `🔍 *DEBUG REMINDER*\n\n${logs.join('\n')}` });
+    }
+
+    // Kirim reminder
+    for (const r of reminders) {
+      const pesan = `🔔 *PENGINGAT TAGIHAN RUTIN* (${r.type})\n\n` +
+        `Tagihan *${r.nama}* sebesar *${formatRupiah(r.nominal)}* jatuh tempo pada tanggal ${r.tgl}.\n\n` +
+        `_Ketik \`>asisten bayar ${r.nama.toLowerCase()}\` jika sudah dibayar._`;
+
+      await sock.sendMessage(target, { text: pesan });
+      console.log(`[CRON] Reminder terkirim: ${r.nama} (${r.type})`);
+    }
+
+  } catch (error) {
+    console.error('[CRON] Error cek langganan:', error.message);
+    logs.push(`[ERROR] ${error.message}`);
+    if (debugTarget) {
+      await sock.sendMessage(debugTarget, { text: `❌ *ERROR REMINDER*\n\n${logs.join('\n')}` });
+    }
+  }
+}
+
+// Tracker agar cron tidak duplikat saat bot reconnect
+let cronStarted = false;
+
+function startSubscriptionReminder(sock) {
+  if (cronStarted) {
+    console.log('[CRON] Cron sudah aktif, skip duplikat.');
+    return;
+  }
+  cronStarted = true;
+
   // Cron: setiap hari jam 09:00 WIB
   cron.schedule('0 9 * * *', async () => {
-    try {
-      console.log('[CRON] Menjalankan cek tagihan langganan...');
-
-      const serviceAccountAuth = new JWT({
-        email: creds.client_email,
-        key: creds.private_key,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
-      const doc = new GoogleSpreadsheet(sheetId, serviceAccountAuth);
-      await doc.loadInfo();
-
-      const sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
-      if (!sheetLangganan) {
-        console.log('[CRON] Sheet langganan tidak ditemukan.');
-        return;
-      }
-
-      const rows = await sheetLangganan.getRows();
-      const aktifRows = rows.filter(row => {
-        const status = (row.get('status') || row.get('Status') || '').toLowerCase();
-        return status === 'aktif';
-      });
-
-      if (aktifRows.length === 0) return;
-
-      // Tanggal hari ini (WIB)
-      const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
-      const hariIni = now.getDate();
-      const bulanIni = now.getMonth() + 1; // 1-12
-      const namaHariIni = now.toLocaleDateString('id-ID', { weekday: 'long', timeZone: 'Asia/Jakarta' }).toLowerCase();
-
-      const reminders = [];
-
-      // Fungsi helper untuk menghitung selisih hari
-      const getDaysDiff = (targetDate, targetMonth) => {
-        const target = new Date(now.getFullYear(), targetMonth - 1, targetDate);
-        const diffTime = target - now;
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays;
-      };
-
-      aktifRows.forEach(row => {
-        const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || '-';
-        const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || '0');
-        const frekuensi = (row.get('frekuensi') || row.get('Frekuensi') || 'bulanan').toLowerCase();
-        const tglStr = (row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '').toString().toLowerCase();
-
-        if (frekuensi === 'harian') {
-          reminders.push({ nama, nominal, tgl: 'Setiap Hari', type: 'HARI INI' });
-        } 
-        else if (frekuensi === 'mingguan') {
-          if (tglStr === namaHariIni) {
-            reminders.push({ nama, nominal, tgl: `Setiap ${tglStr}`, type: 'HARI INI' });
-          }
-        } 
-        else if (frekuensi === 'bulanan') {
-          const tglJatuhTempo = parseInt(tglStr);
-          if (tglJatuhTempo) {
-            const selisih = tglJatuhTempo - hariIni;
-            if (selisih === 0) {
-              reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: 'HARI INI' });
-            } else if (selisih === 1 || selisih === 2) {
-              reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: `H-${selisih}` });
-            }
-          }
-        } 
-        else if (frekuensi === 'tahunan') {
-          // Format DD/MM (contoh: 15/08)
-          const parts = tglStr.split('/');
-          if (parts.length === 2) {
-            const tgl = parseInt(parts[0]);
-            const bln = parseInt(parts[1]);
-            
-            // Hitung selisih hari ini ke target
-            if (bln === bulanIni) {
-               const selisih = tgl - hariIni;
-               if (selisih === 0) {
-                 reminders.push({ nama, nominal, tgl: tglStr, type: 'HARI INI' });
-               } else if (selisih === 1 || selisih === 2) {
-                 reminders.push({ nama, nominal, tgl: tglStr, type: `H-${selisih}` });
-               }
-            }
-          }
-        }
-      });
-
-      if (reminders.length === 0) {
-        console.log('[CRON] Tidak ada tagihan jatuh tempo hari ini / H-2.');
-        return;
-      }
-
-      // Kirim pengingat
-      // Tentukan tujuan pengiriman: owner atau grup tertentu
-      let target = null;
-      if (ownerNumber) {
-        // Jika ownerNumber sudah mengandung suffix (seperti @g.us atau @lid), gunakan langsung
-        if (ownerNumber.toString().includes('@')) {
-          target = ownerNumber.toString();
-        } else {
-          // Fallback ke nomor HP biasa
-          target = `${ownerNumber}@s.whatsapp.net`;
-        }
-      }
-
-      if (!target) {
-        console.log('[CRON] owner_number belum diatur di bot.yml, reminder tidak dikirim.');
-        return;
-      }
-
-      for (const r of reminders) {
-        const pesan = `🔔 *PENGINGAT TAGIHAN RUTIN* (${r.type})\n\n` +
-          `Tagihan *${r.nama}* sebesar *${formatRupiah(r.nominal)}* jatuh tempo pada tanggal ${r.tgl}.\n\n` +
-          `_Ketik \`>asisten bayar ${r.nama.toLowerCase()}\` jika sudah dibayar._`;
-
-        await sock.sendMessage(target, { text: pesan });
-        console.log(`[CRON] Reminder terkirim: ${r.nama} (${r.type})`);
-      }
-
-    } catch (error) {
-      console.error('[CRON] Error cek langganan:', error.message);
-    }
+    console.log('[CRON] Menjalankan cek tagihan langganan...');
+    await runReminderCheck(sock);
   }, {
     scheduled: true,
     timezone: 'Asia/Jakarta'
@@ -166,4 +224,4 @@ function startSubscriptionReminder(sock) {
   console.log('[CRON] Subscription reminder aktif — cek setiap hari jam 09:00 WIB.');
 }
 
-module.exports = { startSubscriptionReminder };
+module.exports = { startSubscriptionReminder, runReminderCheck };
