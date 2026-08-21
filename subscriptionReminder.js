@@ -226,7 +226,8 @@ function startSubscriptionReminder(sock) {
     await runReminderCheck(currentSock);
   }, {
     scheduled: true,
-    timezone: 'Asia/Jakarta'
+    timezone: 'Asia/Jakarta',
+    recoverMissedExecutions: true
   });
 
   console.log('[CRON] Subscription reminder aktif — cek setiap hari jam 09:00 WIB.');
