@@ -10,10 +10,11 @@ module.exports = {
       
       let target = null;
       if (ownerNumber) {
-        if (ownerNumber.toString().includes('@')) {
-          target = ownerNumber.toString();
+        const raw = ownerNumber.toString().trim();
+        if (raw.includes('@')) {
+          target = raw.replace(/:\d+@/, '@');
         } else {
-          target = `${ownerNumber}@s.whatsapp.net`;
+          target = `${raw}@s.whatsapp.net`;
         }
       }
 

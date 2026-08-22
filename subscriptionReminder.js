@@ -162,10 +162,12 @@ async function runReminderCheck(sock, debugTarget = null) {
     // Tentukan target pengiriman
     let target = null;
     if (ownerNumber) {
-      if (ownerNumber.toString().includes('@')) {
-        target = ownerNumber.toString();
+      const raw = ownerNumber.toString().trim();
+      if (raw.includes('@')) {
+        // Hapus nomor device spesifik (misal :9@lid -> @lid) agar pesan terkirim & terdekripsi di SEMUA device (HP Android + WA Web)
+        target = raw.replace(/:\d+@/, '@');
       } else {
-        target = `${ownerNumber}@s.whatsapp.net`;
+        target = `${raw}@s.whatsapp.net`;
       }
     }
 
