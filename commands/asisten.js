@@ -104,22 +104,75 @@ function formatRupiah(val) {
   const prefix = nominal < 0 ? "-Rp " : "Rp ";
   return prefix + Math.abs(nominal).toLocaleString('id-ID');
 }
+
+// Helper: Mapping Dompet
+const WALLET_MAP = {
+  'cs01': 'cash',
+  'dn01': 'dana',
+  'sp01': 'shopeepay',
+  'bj01': 'bank jago',
+  'vc01': 'visa card',
+  'rd01': 'rdn saham',
+  'pl01': 'paylatter',
+  'sb01': 'seabank'
+};
+
+function getWalletName(input) {
+  if (!input) return "cash";
+  const str = input.toLowerCase().trim();
+  if (WALLET_MAP[str]) return WALLET_MAP[str];
+  return str;
+}
+
+function getWalletCode(input) {
+  if (!input) return "CS01";
+  const str = input.toLowerCase().trim();
+  for (const [code, name] of Object.entries(WALLET_MAP)) {
+    if (name === str || code === str) return code.toUpperCase();
+  }
+  return "CS01";
+}
+
+// Helper: Generate ID Transaksi (TRX-XXXX)
+async function generateTrxId(sheet) {
+  const rows = await sheet.getRows();
+  let maxId = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const idVal = rows[i].get('id_transaksi');
+    if (idVal && idVal.startsWith('TRX-')) {
+      const parts = idVal.split('-');
+      if (parts.length >= 2) {
+        // Ambil angkanya saja, abaikan suffix seperti -A atau -B
+        const numPart = parts[1].replace(/[^0-9]/g, '');
+        const num = parseInt(numPart, 10);
+        if (!isNaN(num) && num > maxId) {
+          maxId = num;
+        }
+      }
+    }
+  }
+  const nextNum = maxId + 1;
+  return \`TRX-\${String(nextNum).padStart(4, '0')}\`;
+}
+
 // System Prompt untuk ekstraksi JSON (dari instruksi user)
-const EXTRACTION_PROMPT = `Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
+const EXTRACTION_PROMPT = \`Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
 
 Kategori 'action' yang tersedia:
 1. "catat_transaksi" -> Untuk pencatatan pengeluaran atau pemasukan baru biasa.
-2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya (contoh: "edit transaksi tadi harusnya 15rb dari dana", "eh salah tadi harusnya 20rb dari cash", "revisi transaksi terakhir").
-3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu (contoh: "sesuaikan update untuk sumber dari cash harusnya pemasukan 300rb pengeluaran 0").
-4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan (contoh: "rekap pengeluaran", "laporan keuangan bulan ini", "rekap agustus", "laporan bulan juli").
-5. "cek_pinjaman" -> Jika pengguna ingin mengecek status pinjaman, utang, atau piutang (contoh: "cek utang", "berapa utang galih", "status pinjaman").
-6. "batal_transaksi" -> Jika pengguna mengirim perintah pembatalan atau penghapusan transaksi terakhir (contoh: "batal", "undo", "hapus transaksi tadi", "cancel transaksi terakhir", "salah input hapus barusan").
-7. "tambah_langganan" -> Jika pengguna mendaftarkan langganan atau tagihan rutin baru (contoh: "tambah langganan wifi 350rb tiap tgl 20 pake bca", "catat tagihan kosan 850rb tgl 1").
-8. "cek_langganan" -> Jika pengguna menanyakan daftar langganan atau tagihan rutin (contoh: "cek langganan", "daftar tagihan rutin", "apa saja langganan saya?").
-9. "bayar_langganan" -> Jika pengguna membayar tagihan langganan yang sudah terdaftar (contoh: "bayar wifi indihome", "bayar netflix").
-10. "hapus_langganan" -> Jika pengguna ingin menonaktifkan atau menghapus langganan (contoh: "hapus langganan netflix", "stop spotify").
-11. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
-12. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya (contoh: "edit transaksi tadi harusnya 15rb dari dana").
+3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu.
+4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan.
+5. "cek_pinjaman" -> Jika pengguna ingin mengecek status pinjaman, utang, atau piutang.
+6. "batal_transaksi" -> Jika pengguna mengirim perintah pembatalan atau penghapusan transaksi terakhir (contoh: "batal", "undo").
+7. "tambah_langganan" -> Jika pengguna mendaftarkan langganan atau tagihan rutin baru.
+8. "cek_langganan" -> Jika pengguna menanyakan daftar langganan atau tagihan rutin.
+9. "bayar_langganan" -> Jika pengguna membayar tagihan langganan yang sudah terdaftar.
+10. "hapus_langganan" -> Jika pengguna ingin menonaktifkan atau menghapus langganan.
+11. "transfer" -> Jika pengguna mengirim perintah mutasi/transfer uang dari satu dompet ke dompet lain (contoh: "transfer 200k dari dn01 ke sb01", "pemasukan 200k ke seabank pakai saldo dana").
+12. "hapus_transaksi_id" -> Jika pengguna mengirim perintah hapus transaksi spesifik berdasarkan ID-nya (contoh: "hapus transaksi TRX-0001", "delete TRX-0001").
+13. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
+14. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
 
 Aturan Ekstraksi JSON:
 
@@ -128,71 +181,44 @@ A. Jika action = "catat_transaksi":
    - 'kategori': nama kategori (misal: makanan, transportasi, kebutuhan, dll)
    - 'keterangan': deskripsi singkat transaksi
    - 'nominal': angka (integer)
-   - 'sumber': nama dompet/sumber uang dalam huruf kecil (misal: "cash", "dana", "bank jago", "shopeepay"). Gunakan default "cash" jika tidak disebutkan.
+   - 'sumber': nama dompet/sumber uang (atau kode dompet) dalam huruf kecil (misal: "cash", "dana", "cs01", "dn01"). Gunakan default "cash" jika tidak disebutkan.
 
-   Aturan Tambahan untuk Pinjaman:
-   1. Jika pengguna mengirim pesan pinjaman keluar (contoh: "galih telah melakukan pinjaman 50rb pakai dana", "pinjemin galih 50rb"):
-      - 'tipe': "pengeluaran"
-      - 'kategori': "pinjaman"
-      - 'keterangan': "pinjaman [nama orang]"
-      - 'nominal': angka pinjaman
-      - 'sumber': sumber dana yang digunakan
+B. Jika action = "transfer":
+   - 'is_transaction': true
+   - 'nominal': angka (integer)
+   - 'sumber_asal': sumber asal/pengeluaran dalam huruf kecil
+   - 'sumber_tujuan': sumber tujuan/pemasukan dalam huruf kecil
+   - 'keterangan': deskripsi singkat (misal: "transfer dari dana ke seabank")
 
-   2. Jika pengguna mengirim pesan pengembalian/pembayaran utang (contoh: "galih bayar utang 30rb ke dana", "terima cicilan galih 30rb"):
-      - 'tipe': "pemasukan"
-      - 'kategori': "bayar_pinjaman"
-      - 'keterangan': "bayar pinjaman [nama orang]"
-      - 'nominal': angka pembayaran
-      - 'sumber': sumber dana tujuan
+C. Jika action = "hapus_transaksi_id":
+   - 'target_id': ID transaksi yang ingin dihapus (contoh: "TRX-0001")
 
-B. Jika action = "edit_transaksi_terakhir":
-   - Extract field yang diubah oleh pengguna (misal: 'nominal': 15000, 'sumber': "dana", 'keterangan', 'kategori', 'tipe').
-   - Isikan field yang diubah dengan nilai baru, dan berikan nilai null/kosong pada field yang tidak diubah.
-   - Tambahkan field 'is_edit': true.
+D. Jika action = "edit_transaksi_terakhir":
+   - Extract field yang diubah oleh pengguna (misal: 'nominal': 15000, 'sumber': "dana", 'keterangan', 'kategori', 'tipe'). Berikan nilai null/kosong pada field yang tidak diubah. Tambahkan field 'is_edit': true.
 
-C. Jika action = "koreksi_saldo":
-   - 'sumber': nama sumber uang yang ingin disesuaikan (misal: "cash").
-   - 'nominal_pemasukan': angka nominal baru untuk pemasukan (jika ada/disebutkan).
-   - 'nominal_pengeluaran': angka nominal baru untuk pengeluaran (jika ada/disebutkan).
+E. Jika action = "koreksi_saldo":
+   - 'sumber': nama sumber uang yang ingin disesuaikan.
+   - 'nominal_pemasukan': angka nominal baru (jika ada).
+   - 'nominal_pengeluaran': angka nominal baru (jika ada).
    - 'keterangan': "Penyesuaian saldo / koreksi manual".
 
-D. Jika action = "rekap_bulanan":
-   - 'bulan': nama bulan dan tahun yang diminta (misal: "Agustus 2026"). Jika pengguna tidak menyebutkan bulan spesifik, gunakan bulan saat ini.
-   - 'is_transaction': false
-
-E. Jika action = "cek_pinjaman":
-   - 'is_transaction': false
-
-F. Jika action = "batal_transaksi":
+F. Jika action = "rekap_bulanan":
+   - 'bulan': nama bulan dan tahun (misal: "Agustus 2026").
    - 'is_transaction': false
 
 G. Jika action = "tambah_langganan":
-   - 'nama_layanan': nama layanan/tagihan (misal: "WiFi Indihome", "Netflix", "Kos")
-   - 'nominal': angka nominal tagihan (integer)
-   - 'frekuensi': "harian" | "mingguan" | "bulanan" | "tahunan"
-   - 'tanggal_jatuh_tempo': tanggal/waktu jatuh tempo. Jika harian isikan "-". Jika mingguan isikan nama hari ("Senin"). Jika bulanan isikan tanggal ("20"). Jika tahunan isikan DD/MM ("15/08").
-   - 'sumber_default': nama dompet/sumber pembayaran default (misal: "bca", "dana", "cash"). Default "cash" jika tidak disebutkan.
-   - 'kategori': kategori tagihan (misal: "kebutuhan", "hiburan", "internet")
-   - 'is_transaction': false
+   - 'nama_layanan', 'nominal', 'frekuensi', 'tanggal_jatuh_tempo', 'sumber_default', 'kategori', 'status'.
 
-H. Jika action = "cek_langganan":
-   - 'is_transaction': false
+H. Jika action = "cek_pinjaman", "batal_transaksi", "cek_langganan", "bayar_langganan", "hapus_langganan":
+   - Ikuti properti yang sama seperti aturan sebelumnya (tambahkan 'is_transaction': false jika relevan).
 
-I. Jika action = "bayar_langganan":
-   - 'nama_layanan': nama layanan yang dibayar (misal: "wifi indihome", "netflix")
-   - 'is_transaction': false
-
-J. Jika action = "hapus_langganan":
-   - 'nama_layanan': nama layanan yang ingin dihapus/dinonaktifkan (misal: "netflix", "spotify")
-   - 'is_transaction': false
-
-K. Jika action = "tanya":
+I. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-L. Jika action = "chat":
+J. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
-Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
+Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.\`;
 
 module.exports = {
   name: "asisten",
@@ -234,24 +260,112 @@ module.exports = {
       if (data.action === "catat_transaksi") {
         const sheet = await getSheet(sheetId, 'transaksi');
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        const idTrx = await generateTrxId(sheet);
+        const dompetKode = getWalletCode(data.sumber);
+        const dompetNama = getWalletName(data.sumber);
 
         await sheet.addRow({
+          id_transaksi: idTrx,
           Timestamp: timestamp,
           WA_ID: waId.split('@')[0],
           Tipe: data.tipe,
           Kategori: data.kategori,
           Keterangan: data.keterangan,
           Nominal: data.nominal,
-          Sumber: data.sumber || "cash"
+          Sumber: dompetNama
         });
 
         const emoji = data.tipe === 'pemasukan' ? '💰' : '💸';
         const reply = `${emoji} *Tercatat!*\n\n` +
-          `• *${data.tipe.toUpperCase()}*: ${data.keterangan}\n` +
-          `• *Nominal*: ${formatRupiah(data.nominal)}\n` +
-          `• *Kategori*: ${data.kategori}\n` +
-          `• *Sumber*: ${data.sumber || "cash"}\n\n` +
+          `• ID       : ${idTrx}\n` +
+          `• ${data.tipe.toUpperCase()}: ${data.keterangan}\n` +
+          `• Nominal  : ${formatRupiah(data.nominal)}\n` +
+          `• Kategori : ${data.kategori}\n` +
+          `• Sumber   : ${dompetKode} ${dompetNama.toUpperCase()}\n\n` +
           `_Sudah masuk ke Spreadsheet._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI BARU: TRANSFER =====
+      } else if (data.action === "transfer") {
+        const sheet = await getSheet(sheetId, 'transaksi');
+        const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        
+        const baseId = await generateTrxId(sheet);
+        const idOut = `${baseId}-A`;
+        const idIn = `${baseId}-B`;
+        
+        const asalKode = getWalletCode(data.sumber_asal);
+        const asalNama = getWalletName(data.sumber_asal);
+        const tujuanKode = getWalletCode(data.sumber_tujuan);
+        const tujuanNama = getWalletName(data.sumber_tujuan);
+        
+        // Catat Pengeluaran
+        await sheet.addRow({
+          id_transaksi: idOut,
+          Timestamp: timestamp,
+          WA_ID: waId.split('@')[0],
+          Tipe: "pengeluaran",
+          Kategori: "transfer",
+          Keterangan: data.keterangan || `Transfer ke ${tujuanNama}`,
+          Nominal: data.nominal,
+          Sumber: asalNama
+        });
+        
+        // Catat Pemasukan
+        await sheet.addRow({
+          id_transaksi: idIn,
+          Timestamp: timestamp,
+          WA_ID: waId.split('@')[0],
+          Tipe: "pemasukan",
+          Kategori: "transfer",
+          Keterangan: data.keterangan || `Terima transfer dari ${asalNama}`,
+          Nominal: data.nominal,
+          Sumber: tujuanNama
+        });
+        
+        const reply = `🔄 *TRANSFER SALDO BERHASIL*\n\n` +
+          `• ID Keluar : ${idOut} (${asalKode} ${asalNama.toUpperCase()})\n` +
+          `• ID Masuk  : ${idIn} (${tujuanKode} ${tujuanNama.toUpperCase()})\n` +
+          `• Nominal   : ${formatRupiah(data.nominal)}\n\n` +
+          `_Mutasi selesai dicatat ke Spreadsheet._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI BARU: HAPUS BY ID =====
+      } else if (data.action === "hapus_transaksi_id") {
+        const sheet = await getSheet(sheetId, 'transaksi');
+        const rows = await sheet.getRows();
+        const targetId = (data.target_id || '').toUpperCase().trim();
+        
+        let foundRow = null;
+        for (let i = 0; i < rows.length; i++) {
+          if ((rows[i].get('id_transaksi') || '').toUpperCase() === targetId) {
+            foundRow = rows[i];
+            break;
+          }
+        }
+        
+        if (!foundRow) {
+          await sock.sendMessage(from, { text: `⚠️ Transaksi dengan ID *${targetId}* tidak ditemukan.` }, { quoted: msg });
+          return;
+        }
+        
+        const oldData = {
+          tipe: foundRow.get('Tipe') || '-',
+          keterangan: foundRow.get('Keterangan') || '-',
+          nominal: Number(foundRow.get('Nominal')) || 0,
+          sumber: foundRow.get('Sumber') || '-'
+        };
+        
+        await foundRow.delete();
+        
+        const reply = `🗑️ *TRANSAKSI BERHASIL DIHAPUS*\n\n` +
+          `• ID       : ${targetId}\n` +
+          `• Tipe     : ${oldData.tipe.toUpperCase()}\n` +
+          `• Nominal  : ${formatRupiah(oldData.nominal)}\n` +
+          `• Sumber   : ${oldData.sumber}\n\n` +
+          `_Data telah dihapus secara permanen._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
