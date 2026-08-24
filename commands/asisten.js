@@ -800,11 +800,12 @@ module.exports = {
           ditambahkan: timestamp
         });
 
+        const freq = (data.frekuensi || 'bulanan').toLowerCase();
         let tempoText = '';
-        if (data.frekuensi === 'harian') tempoText = 'Setiap Hari';
-        else if (data.frekuensi === 'mingguan') tempoText = `Setiap Hari ${data.tanggal_jatuh_tempo}`;
-        else if (data.frekuensi === 'tahunan') tempoText = `Setiap Tanggal ${data.tanggal_jatuh_tempo} per tahun`;
-        else tempoText = `Tanggal ${data.tanggal_jatuh_tempo} setiap bulan`;
+        if (freq.includes('harian')) tempoText = 'Setiap Hari';
+        else if (freq.includes('mingguan')) tempoText = `Setiap ${data.tanggal_jatuh_tempo || 'Minggu'}`;
+        else if (freq.includes('tahunan')) tempoText = `Setiap Tanggal ${data.tanggal_jatuh_tempo || '-'} per tahun`;
+        else tempoText = `Tanggal ${data.tanggal_jatuh_tempo || '-'} setiap bulan`;
 
         const reply = `📌 *LANGGANAN BERHASIL DITAMBAHKAN*\n\n` +
           `• ID Langganan : ${idSub}\n` +
@@ -850,16 +851,17 @@ module.exports = {
           const tgl = row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || row._rawData[4] || '-';
           const sumber = row.get('sumber_default') || row.get('Sumber_Default') || row._rawData[5] || 'cash';
 
-          if (frekuensi === 'bulanan') totalBeban += nominal;
-          else if (frekuensi === 'harian') totalBeban += (nominal * 30);
-          else if (frekuensi === 'mingguan') totalBeban += (nominal * 4);
-          else if (frekuensi === 'tahunan') totalBeban += Math.floor(nominal / 12);
+          const freqLower = (frekuensi || '').toLowerCase();
+          if (freqLower.includes('bulanan')) totalBeban += nominal;
+          else if (freqLower.includes('harian')) totalBeban += (nominal * 30);
+          else if (freqLower.includes('mingguan')) totalBeban += (nominal * 4);
+          else if (freqLower.includes('tahunan')) totalBeban += Math.floor(nominal / 12);
 
           let tempoLabel = '';
-          if (frekuensi === 'harian') tempoLabel = 'Setiap Hari';
-          else if (frekuensi === 'mingguan') tempoLabel = `Tiap ${tgl}`;
-          else if (frekuensi === 'tahunan') tempoLabel = `Tgl ${tgl}`;
-          else tempoLabel = `Tgl ${tgl}`;
+          if (freqLower.includes('harian')) tempoLabel = 'Setiap Hari';
+          else if (freqLower.includes('mingguan')) tempoLabel = `Tiap ${tgl || 'Minggu'}`;
+          else if (freqLower.includes('tahunan')) tempoLabel = `Tgl ${tgl || '-'}`;
+          else tempoLabel = `Tgl ${tgl || '-'}`;
 
           replyText += `\n• *${idSub} | ${nama}* : ${formatRupiah(nominal)} / ${frekuensi}\n` +
             `  - Jatuh Tempo : ${tempoLabel}\n` +
