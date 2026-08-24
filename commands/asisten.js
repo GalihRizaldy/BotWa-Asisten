@@ -152,11 +152,11 @@ async function generateTrxId(sheet) {
     }
   }
   const nextNum = maxId + 1;
-  return \`TRX-\${String(nextNum).padStart(4, '0')}\`;
+  return `TRX-${String(nextNum).padStart(4, '0')}`;
 }
 
 // System Prompt untuk ekstraksi JSON (dari instruksi user)
-const EXTRACTION_PROMPT = \`Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
+const EXTRACTION_PROMPT = `Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
 
 Kategori 'action' yang tersedia:
 1. "catat_transaksi" -> Untuk pencatatan pengeluaran atau pemasukan baru biasa.
@@ -218,7 +218,7 @@ I. Jika action = "tanya":
 J. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
-Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.\`;
+Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
 
 module.exports = {
   name: "asisten",
