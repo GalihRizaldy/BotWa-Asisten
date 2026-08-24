@@ -155,67 +155,83 @@ async function generateTrxId(sheet) {
   return `TRX-${String(nextNum).padStart(4, '0')}`;
 }
 
+// Helper: Generate ID Langganan (SUB-XXX)
+async function generateSubId(sheet) {
+  const rows = await sheet.getRows();
+  let maxId = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const idVal = rows[i].get('id_langganan') || rows[i]._rawData[0];
+    if (idVal && idVal.startsWith('SUB-')) {
+      const numPart = idVal.replace('SUB-', '').replace(/[^0-9]/g, '');
+      const num = parseInt(numPart, 10);
+      if (!isNaN(num) && num > maxId) {
+        maxId = num;
+      }
+    }
+  }
+  const nextNum = maxId + 1;
+  return `SUB-${String(nextNum).padStart(3, '0')}`;
+}
+
 // System Prompt untuk ekstraksi JSON (dari instruksi user)
 const EXTRACTION_PROMPT = `Kamu adalah asisten pengekstrak data transaksi keuangan. Tugasmu adalah menganalisis pesan pengguna dan mengembalikan output JSON dengan struktur yang ditentukan.
 
 Kategori 'action' yang tersedia:
-1. "catat_transaksi" -> Untuk pencatatan pengeluaran atau pemasukan baru biasa.
-2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya (contoh: "edit transaksi tadi harusnya 15rb dari dana").
+1. "catat_transaksi" -> Untuk pencatatan pengeluaran atau pemasukan baru biasa. Termasuk memberi pinjaman.
+2. "edit_transaksi_terakhir" -> Jika pengguna ingin mengubah/mengoreksi transaksi yang baru saja dikirim sebelumnya.
 3. "koreksi_saldo" -> Jika pengguna ingin menyesuaikan/set ulang total saldo atau total pemasukan/pengeluaran untuk sumber tertentu.
 4. "rekap_bulanan" -> Jika pengguna meminta rekap, laporan bulanan, atau rangkuman keuangan per bulan.
 5. "cek_pinjaman" -> Jika pengguna ingin mengecek status pinjaman, utang, atau piutang.
-6. "batal_transaksi" -> Jika pengguna mengirim perintah pembatalan atau penghapusan transaksi terakhir (contoh: "batal", "undo").
-7. "tambah_langganan" -> Jika pengguna mendaftarkan langganan atau tagihan rutin baru.
-8. "cek_langganan" -> Jika pengguna menanyakan daftar langganan atau tagihan rutin.
-9. "bayar_langganan" -> Jika pengguna membayar tagihan langganan yang sudah terdaftar.
-10. "hapus_langganan" -> Jika pengguna ingin menonaktifkan atau menghapus langganan.
-11. "transfer" -> Jika pengguna mengirim perintah mutasi/transfer uang dari satu dompet ke dompet lain (contoh: "transfer 200k dari dn01 ke sb01", "pemasukan 200k ke seabank pakai saldo dana").
-12. "hapus_transaksi_id" -> Jika pengguna mengirim perintah hapus transaksi spesifik berdasarkan ID-nya (contoh: "hapus transaksi TRX-0001", "delete TRX-0001").
-13. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik, detail transaksi tertentu, atau informasi yang bukan rekap bulanan.
-14. "chat" -> Jika pesan hanya sapaan atau obrolan biasa yang tidak berhubungan dengan transaksi keuangan.
+6. "bayar_pinjaman" -> Jika pengguna menerima pembayaran utang atau membayar piutang (contoh: "ali bayar utang 10k pake cash", "terima bayar pinjaman alwi 30rb").
+7. "batal_transaksi" -> Jika pengguna mengirim perintah pembatalan atau penghapusan transaksi terakhir (contoh: "batal", "undo").
+8. "tambah_langganan" -> Jika pengguna mendaftarkan langganan atau tagihan rutin baru.
+9. "cek_langganan" -> Jika pengguna menanyakan daftar langganan atau tagihan rutin.
+10. "bayar_langganan" -> Jika pengguna membayar tagihan langganan yang sudah terdaftar.
+11. "hapus_langganan" -> Jika pengguna ingin menonaktifkan atau menghapus langganan.
+12. "transfer" -> Jika pengguna mengirim perintah mutasi/transfer uang dari satu dompet ke dompet lain.
+13. "hapus_transaksi_id" -> Jika pengguna mengirim perintah hapus transaksi spesifik berdasarkan ID-nya (contoh: "hapus transaksi TRX-0001", "delete TRX-0001").
+14. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik.
+15. "chat" -> Jika pesan hanya sapaan atau obrolan biasa.
 
 Aturan Ekstraksi JSON:
 
 A. Jika action = "catat_transaksi":
    - 'tipe': "pemasukan" atau "pengeluaran"
-   - 'kategori': nama kategori (misal: makanan, transportasi, kebutuhan, dll)
+   - 'kategori': nama kategori
    - 'keterangan': deskripsi singkat transaksi
    - 'nominal': angka (integer)
-   - 'sumber': nama dompet/sumber uang (atau kode dompet) dalam huruf kecil (misal: "cash", "dana", "cs01", "dn01"). Gunakan default "cash" jika tidak disebutkan.
+   - 'sumber': nama dompet/sumber uang (atau kode dompet) dalam huruf kecil. Default "cash".
 
 B. Jika action = "transfer":
-   - 'is_transaction': true
-   - 'nominal': angka (integer)
-   - 'sumber_asal': sumber asal/pengeluaran dalam huruf kecil
-   - 'sumber_tujuan': sumber tujuan/pemasukan dalam huruf kecil
-   - 'keterangan': deskripsi singkat (misal: "transfer dari dana ke seabank")
+   - 'is_transaction': true, 'nominal', 'sumber_asal', 'sumber_tujuan', 'keterangan'
 
 C. Jika action = "hapus_transaksi_id":
    - 'target_id': ID transaksi yang ingin dihapus (contoh: "TRX-0001")
 
 D. Jika action = "edit_transaksi_terakhir":
-   - Extract field yang diubah oleh pengguna (misal: 'nominal': 15000, 'sumber': "dana", 'keterangan', 'kategori', 'tipe'). Berikan nilai null/kosong pada field yang tidak diubah. Tambahkan field 'is_edit': true.
+   - Extract field yang diubah oleh pengguna. Tambahkan field 'is_edit': true.
 
 E. Jika action = "koreksi_saldo":
-   - 'sumber': nama sumber uang yang ingin disesuaikan.
-   - 'nominal_pemasukan': angka nominal baru (jika ada).
-   - 'nominal_pengeluaran': angka nominal baru (jika ada).
-   - 'keterangan': "Penyesuaian saldo / koreksi manual".
+   - 'sumber', 'nominal_pemasukan', 'nominal_pengeluaran', 'keterangan': "Penyesuaian saldo".
 
 F. Jika action = "rekap_bulanan":
-   - 'bulan': nama bulan dan tahun (misal: "Agustus 2026").
-   - 'is_transaction': false
+   - 'bulan', 'is_transaction': false
 
 G. Jika action = "tambah_langganan":
    - 'nama_layanan', 'nominal', 'frekuensi', 'tanggal_jatuh_tempo', 'sumber_default', 'kategori', 'status'.
 
-H. Jika action = "cek_pinjaman", "batal_transaksi", "cek_langganan", "bayar_langganan", "hapus_langganan":
-   - Ikuti properti yang sama seperti aturan sebelumnya (tambahkan 'is_transaction': false jika relevan).
+H. Jika action = "bayar_pinjaman":
+   - 'nama': nama orang yang berutang/dibayar
+   - 'nominal': angka (integer)
+   - 'sumber': nama dompet tujuan pembayaran (huruf kecil)
 
-I. Jika action = "tanya":
+I. Jika action = "cek_pinjaman", "batal_transaksi", "cek_langganan", "bayar_langganan", "hapus_langganan":
+   - Ikuti properti yang sama seperti aturan sebelumnya (tambahkan 'is_transaction': false jika relevan). Untuk 'bayar_langganan', butuh 'nama_layanan' atau target ID.
+
+J. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-J. Jika action = "chat":
+K. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
 Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
@@ -335,14 +351,17 @@ module.exports = {
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
       // ===== AKSI BARU: HAPUS BY ID =====
+      // ===== AKSI BARU: HAPUS BY ID =====
       } else if (data.action === "hapus_transaksi_id") {
         const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow();
         const rows = await sheet.getRows();
         const targetId = (data.target_id || '').toUpperCase().trim();
         
         let foundRow = null;
         for (let i = 0; i < rows.length; i++) {
-          if ((rows[i].get('id_transaksi') || '').toUpperCase() === targetId) {
+          const rowId = rows[i].get('id_transaksi') || rows[i]._rawData[0];
+          if ((rowId || '').toUpperCase() === targetId) {
             foundRow = rows[i];
             break;
           }
@@ -353,20 +372,18 @@ module.exports = {
           return;
         }
         
-        const oldData = {
-          tipe: foundRow.get('Tipe') || '-',
-          keterangan: foundRow.get('Keterangan') || '-',
-          nominal: Number(foundRow.get('Nominal')) || 0,
-          sumber: foundRow.get('Sumber') || '-'
-        };
+        const idTrx = foundRow.get('id_transaksi') || foundRow._rawData[0] || '-';
+        const tipeTrx = foundRow.get('tipe') || foundRow._rawData[3] || '-';
+        const nominalTrx = parseRupiah(foundRow.get('nominal') || foundRow._rawData[6] || '0');
+        const sumberTrx = foundRow.get('sumber') || foundRow._rawData[7] || '-';
         
         await foundRow.delete();
         
         const reply = `🗑️ *TRANSAKSI BERHASIL DIHAPUS*\n\n` +
-          `• ID       : ${targetId}\n` +
-          `• Tipe     : ${oldData.tipe.toUpperCase()}\n` +
-          `• Nominal  : ${formatRupiah(oldData.nominal)}\n` +
-          `• Sumber   : ${oldData.sumber}\n\n` +
+          `• ID       : ${idTrx}\n` +
+          `• Tipe     : ${tipeTrx.toUpperCase()}\n` +
+          `• Nominal  : Rp ${Math.abs(nominalTrx).toLocaleString('id-ID')}\n` +
+          `• Sumber   : ${sumberTrx}\n\n` +
           `_Data telah dihapus secara permanen._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
@@ -374,13 +391,15 @@ module.exports = {
       // ===== AKSI 2: BATALKAN TRANSAKSI TERAKHIR =====
       } else if (data.action === "batal_transaksi") {
         const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow();
         const rows = await sheet.getRows();
         const userId = waId.split('@')[0];
 
         // Cari transaksi terakhir milik user ini
         let lastRow = null;
         for (let i = rows.length - 1; i >= 0; i--) {
-          if (rows[i].get('WA_ID') === userId) {
+          const rowWaId = rows[i].get('wa_id') || rows[i]._rawData[2];
+          if (rowWaId === userId) {
             lastRow = rows[i];
             break;
           }
@@ -391,37 +410,34 @@ module.exports = {
           return;
         }
 
-        // Simpan data lama untuk ditampilkan
-        const oldData = {
-          tipe: lastRow.get('Tipe') || '-',
-          keterangan: lastRow.get('Keterangan') || '-',
-          nominal: Number(lastRow.get('Nominal')) || 0,
-          sumber: lastRow.get('Sumber') || '-'
-        };
+        const idTrx = lastRow.get('id_transaksi') || lastRow._rawData[0] || '-';
+        const tipeTrx = lastRow.get('tipe') || lastRow._rawData[3] || '-';
+        const nominalTrx = parseRupiah(lastRow.get('nominal') || lastRow._rawData[6] || '0');
+        const sumberTrx = lastRow.get('sumber') || lastRow._rawData[7] || '-';
 
-        // Hapus baris tersebut
         await lastRow.delete();
 
-        const reply = `🗑️ *TRANSAKSI BERHASIL DIBATALKAN*\n\n` +
-          `Detail transaksi yang dihapus:\n` +
-          `• Keterangan : ${oldData.keterangan}\n` +
-          `• Tipe       : ${oldData.tipe.toUpperCase()}\n` +
-          `• Nominal    : Rp ${Math.abs(oldData.nominal).toLocaleString('id-ID')}\n` +
-          `• Sumber     : ${oldData.sumber}\n\n` +
-          `_Data telah dihapus dari sheet transaksi dan saldo otomatis menyesuaikan._`;
+        const reply = `🗑️ *TRANSAKSI BERHASIL DIHAPUS*\n\n` +
+          `• ID       : ${idTrx}\n` +
+          `• Tipe     : ${tipeTrx.toUpperCase()}\n` +
+          `• Nominal  : Rp ${Math.abs(nominalTrx).toLocaleString('id-ID')}\n` +
+          `• Sumber   : ${sumberTrx}\n\n` +
+          `_Data telah dihapus secara permanen._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
       // ===== AKSI 3: EDIT TRANSAKSI TERAKHIR =====
       } else if (data.action === "edit_transaksi_terakhir") {
         const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow();
         const rows = await sheet.getRows();
         const userId = waId.split('@')[0];
 
         // Cari transaksi terakhir milik user ini
         let lastRow = null;
         for (let i = rows.length - 1; i >= 0; i--) {
-          if (rows[i].get('WA_ID') === userId) {
+          const rowWaId = rows[i].get('wa_id') || rows[i]._rawData[2];
+          if (rowWaId === userId) {
             lastRow = rows[i];
             break;
           }
@@ -434,19 +450,19 @@ module.exports = {
 
         // Simpan data lama untuk ditampilkan
         const oldData = {
-          tipe: lastRow.get('Tipe'),
-          kategori: lastRow.get('Kategori'),
-          keterangan: lastRow.get('Keterangan'),
-          nominal: lastRow.get('Nominal'),
-          sumber: lastRow.get('Sumber')
+          tipe: lastRow.get('tipe') || lastRow._rawData[3],
+          kategori: lastRow.get('kategori') || lastRow._rawData[4],
+          keterangan: lastRow.get('keterangan') || lastRow._rawData[5],
+          nominal: parseRupiah(lastRow.get('nominal') || lastRow._rawData[6]),
+          sumber: lastRow.get('sumber') || lastRow._rawData[7]
         };
 
         // Update hanya field yang diubah (non-null)
-        if (data.tipe) lastRow.set('Tipe', data.tipe);
-        if (data.kategori) lastRow.set('Kategori', data.kategori);
-        if (data.keterangan) lastRow.set('Keterangan', data.keterangan);
-        if (data.nominal) lastRow.set('Nominal', data.nominal);
-        if (data.sumber) lastRow.set('Sumber', data.sumber);
+        if (data.tipe) lastRow.set('tipe', data.tipe.toLowerCase());
+        if (data.kategori) lastRow.set('kategori', data.kategori.toLowerCase());
+        if (data.keterangan) lastRow.set('keterangan', data.keterangan);
+        if (data.nominal) lastRow.set('nominal', data.nominal);
+        if (data.sumber) lastRow.set('sumber', data.sumber.toLowerCase());
 
         await lastRow.save();
 
@@ -467,18 +483,21 @@ module.exports = {
       // ===== AKSI 3: KOREKSI SALDO =====
       } else if (data.action === "koreksi_saldo") {
         const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow();
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-        const sumber = data.sumber || "cash";
+        const sumber = (data.sumber || "cash").toLowerCase();
 
         // Hitung total saat ini untuk sumber tersebut
         const rows = await sheet.getRows();
         let totalPemasukan = 0;
         let totalPengeluaran = 0;
         rows.forEach(row => {
-          if (row.get('Sumber')?.toLowerCase() === sumber.toLowerCase()) {
-            const nominal = Number(row.get('Nominal')) || 0;
-            if (row.get('Tipe')?.toLowerCase() === 'pemasukan') totalPemasukan += nominal;
-            if (row.get('Tipe')?.toLowerCase() === 'pengeluaran') totalPengeluaran += nominal;
+          const rowSumber = row.get('sumber') || row._rawData[7];
+          if (rowSumber?.toLowerCase() === sumber) {
+            const nominal = parseRupiah(row.get('nominal') || row._rawData[6]);
+            const tipe = row.get('tipe') || row._rawData[3];
+            if (tipe?.toLowerCase() === 'pemasukan') totalPemasukan += nominal;
+            if (tipe?.toLowerCase() === 'pengeluaran') totalPengeluaran += nominal;
           }
         });
 
@@ -488,14 +507,16 @@ module.exports = {
         if (data.nominal_pemasukan !== undefined && data.nominal_pemasukan !== null) {
           const selisihMasuk = data.nominal_pemasukan - totalPemasukan;
           if (selisihMasuk !== 0) {
+            const idTrx = await generateTrxId(sheet);
             await sheet.addRow({
-              Timestamp: timestamp,
-              WA_ID: waId.split('@')[0],
-              Tipe: selisihMasuk >= 0 ? "pemasukan" : "pengeluaran",
-              Kategori: "koreksi",
-              Keterangan: `Koreksi saldo pemasukan ${sumber} (${formatRupiah(totalPemasukan)} → ${formatRupiah(data.nominal_pemasukan)})`,
-              Nominal: Math.abs(selisihMasuk),
-              Sumber: sumber
+              id_transaksi: idTrx,
+              timestamp: timestamp,
+              wa_id: waId.split('@')[0],
+              tipe: selisihMasuk >= 0 ? "pemasukan" : "pengeluaran",
+              kategori: "koreksi",
+              keterangan: `Koreksi saldo pemasukan ${sumber} (${formatRupiah(totalPemasukan)} → ${formatRupiah(data.nominal_pemasukan)})`,
+              nominal: Math.abs(selisihMasuk),
+              sumber: sumber
             });
             koreksiDone.push(`Pemasukan ${sumber}: ${formatRupiah(totalPemasukan)} → ${formatRupiah(data.nominal_pemasukan)}`);
           }
@@ -504,14 +525,16 @@ module.exports = {
         if (data.nominal_pengeluaran !== undefined && data.nominal_pengeluaran !== null) {
           const selisihKeluar = data.nominal_pengeluaran - totalPengeluaran;
           if (selisihKeluar !== 0) {
+            const idTrx = await generateTrxId(sheet);
             await sheet.addRow({
-              Timestamp: timestamp,
-              WA_ID: waId.split('@')[0],
-              Tipe: selisihKeluar >= 0 ? "pengeluaran" : "pemasukan",
-              Kategori: "koreksi",
-              Keterangan: `Koreksi saldo pengeluaran ${sumber} (${formatRupiah(totalPengeluaran)} → ${formatRupiah(data.nominal_pengeluaran)})`,
-              Nominal: Math.abs(selisihKeluar),
-              Sumber: sumber
+              id_transaksi: idTrx,
+              timestamp: timestamp,
+              wa_id: waId.split('@')[0],
+              tipe: selisihKeluar >= 0 ? "pengeluaran" : "pemasukan",
+              kategori: "koreksi",
+              keterangan: `Koreksi saldo pengeluaran ${sumber} (${formatRupiah(totalPengeluaran)} → ${formatRupiah(data.nominal_pengeluaran)})`,
+              nominal: Math.abs(selisihKeluar),
+              sumber: sumber
             });
             koreksiDone.push(`Pengeluaran ${sumber}: ${formatRupiah(totalPengeluaran)} → ${formatRupiah(data.nominal_pengeluaran)}`);
           }
@@ -530,6 +553,7 @@ module.exports = {
       } else if (data.action === "rekap_bulanan") {
         const doc = await getDoc(sheetId);
         const sheetTransaksi = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
+        await sheetTransaksi.loadHeaderRow();
         const sheetKeuangan = doc.sheetsByTitle['keuangan'];
         const sheetLaporan = doc.sheetsByTitle['laporan_bulanan'];
 
@@ -540,7 +564,8 @@ module.exports = {
         // Filter transaksi berdasarkan bulan
         const allRows = await sheetTransaksi.getRows();
         const filtered = allRows.filter(row => {
-          const parsed = parseTimestampMonth(row.get('Timestamp'));
+          const timestampStr = row.get('timestamp') || row._rawData[1];
+          const parsed = parseTimestampMonth(timestampStr);
           return parsed && parsed.bulan === requested.bulan && parsed.tahun === requested.tahun;
         });
 
@@ -550,9 +575,9 @@ module.exports = {
         const kategoriMap = {};
 
         filtered.forEach(row => {
-          const nominal = parseRupiah(row.get('Nominal'));
-          const tipe = (row.get('Tipe') || '').toLowerCase();
-          const kategori = row.get('Kategori') || 'lainnya';
+          const nominal = parseRupiah(row.get('nominal') || row._rawData[6] || '0');
+          const tipe = (row.get('tipe') || row._rawData[3] || '').toLowerCase();
+          const kategori = (row.get('kategori') || row._rawData[4] || 'lainnya').toLowerCase();
 
           if (tipe === 'pemasukan') {
             totalPemasukan += nominal;
@@ -677,24 +702,100 @@ module.exports = {
 
         await sock.sendMessage(from, { text: replyText }, { quoted: msg });
 
+      // ===== AKSI 5B: BAYAR PINJAMAN =====
+      } else if (data.action === "bayar_pinjaman") {
+        const doc = await getDoc(sheetId);
+        const sheetPinjaman = doc.sheetsByTitle['pinjaman'] || doc.sheetsByTitle['Pinjaman'];
+        const sheetTransaksi = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
+
+        if (!sheetPinjaman) {
+          await sock.sendMessage(from, { text: "Sheet 'pinjaman' belum tersedia." }, { quoted: msg });
+          return;
+        }
+
+        const rows = await sheetPinjaman.getRows();
+        const namaTarget = (data.nama || '').toLowerCase();
+        
+        let foundRow = null;
+        for (let i = 0; i < rows.length; i++) {
+          const rowNama = (rows[i].get('nama') || rows[i].get('Nama') || '').toLowerCase();
+          if (rowNama && rowNama.includes(namaTarget)) {
+            foundRow = rows[i];
+            break;
+          }
+        }
+
+        if (!foundRow) {
+          await sock.sendMessage(from, { text: `⚠️ Data pinjaman atas nama *${data.nama}* tidak ditemukan.` }, { quoted: msg });
+          return;
+        }
+
+        const pinjamanAwal = parseRupiah(foundRow.get('pinjaman') || foundRow.get('Pinjaman') || '0');
+        const pembayaranLama = parseRupiah(foundRow.get('pembayaran') || foundRow.get('Pembayaran') || '0');
+        
+        const totalPembayaranBaru = pembayaranLama + data.nominal;
+        const sisaBaru = pinjamanAwal - totalPembayaranBaru;
+        const status = (sisaBaru <= 0) ? 'LUNAS' : 'BELUM LUNAS';
+
+        foundRow.set('pembayaran', totalPembayaranBaru);
+        foundRow.set('sisa', sisaBaru);
+        if (foundRow.get('status') !== undefined) foundRow.set('status', status);
+        else if (foundRow.get('Status') !== undefined) foundRow.set('Status', status);
+        else if (foundRow.get('keterangan') !== undefined) foundRow.set('keterangan', status);
+        else if (foundRow.get('Keterangan') !== undefined) foundRow.set('Keterangan', status);
+        else foundRow.set('status', status); // fallback
+
+        await foundRow.save();
+
+        await sheetTransaksi.loadHeaderRow();
+        const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        const idTrx = await generateTrxId(sheetTransaksi);
+        const dompetKode = getWalletCode(data.sumber);
+        const dompetNama = getWalletName(data.sumber).toLowerCase();
+
+        await sheetTransaksi.addRow({
+          id_transaksi: idTrx,
+          timestamp: timestamp,
+          wa_id: waId.split('@')[0],
+          tipe: 'pemasukan',
+          kategori: 'bayar_pinjaman',
+          keterangan: `bayar pinjaman ${foundRow.get('nama') || foundRow.get('Nama') || data.nama}`,
+          nominal: data.nominal,
+          sumber: dompetNama
+        });
+
+        const reply = `💰 *PEMBAYARAN PINJAMAN TERCATAT*\n\n` +
+          `• ID TRX       : ${idTrx}\n` +
+          `• Nama         : ${foundRow.get('nama') || foundRow.get('Nama') || data.nama}\n` +
+          `• Nominal      : Rp ${data.nominal.toLocaleString('id-ID')}\n` +
+          `• Masuk ke     : ${dompetKode} ${dompetNama.toUpperCase()}\n` +
+          `• Sisa Piutang : Rp ${Math.max(0, sisaBaru).toLocaleString('id-ID')} (${status})\n\n` +
+          `_Sudah otomatis tercatat di sheet transaksi dan sheet pinjaman._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
       // ===== AKSI 6: TAMBAH LANGGANAN =====
       } else if (data.action === "tambah_langganan") {
         const doc = await getDoc(sheetId);
         let sheetLangganan = doc.sheetsByTitle['langganan'] || doc.sheetsByTitle['Langganan'];
 
         if (!sheetLangganan) {
-          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia. Silakan buat sheet bernama 'langganan' dengan kolom: nama_layanan, nominal, frekuensi, tanggal_jatuh_tempo, sumber_default, kategori, status." }, { quoted: msg });
+          await sock.sendMessage(from, { text: "Sheet 'langganan' belum tersedia. Silakan buat sheet bernama 'langganan' dengan header baris 1 huruf kecil: id_langganan, nama_layanan, nominal, frekuensi, tanggal_jatuh_tempo, sumber_default, kategori, status, ditambahkan." }, { quoted: msg });
           return;
         }
 
+        await sheetLangganan.loadHeaderRow();
+        const idSub = await generateSubId(sheetLangganan);
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        
         await sheetLangganan.addRow({
+          id_langganan: idSub,
           nama_layanan: data.nama_layanan,
           nominal: data.nominal,
-          frekuensi: data.frekuensi || 'bulanan',
+          frekuensi: (data.frekuensi || 'bulanan').toLowerCase(),
           tanggal_jatuh_tempo: data.tanggal_jatuh_tempo,
-          sumber_default: data.sumber_default || 'cash',
-          kategori: data.kategori || 'kebutuhan',
+          sumber_default: (data.sumber_default || 'cash').toLowerCase(),
+          kategori: (data.kategori || 'kebutuhan').toLowerCase(),
           status: 'aktif',
           ditambahkan: timestamp
         });
@@ -706,12 +807,13 @@ module.exports = {
         else tempoText = `Tanggal ${data.tanggal_jatuh_tempo} setiap bulan`;
 
         const reply = `📌 *LANGGANAN BERHASIL DITAMBAHKAN*\n\n` +
-          `• Layanan     : ${data.nama_layanan}\n` +
-          `• Nominal     : ${formatRupiah(data.nominal)}\n` +
-          `• Frekuensi   : ${data.frekuensi || 'bulanan'}\n` +
-          `• Jatuh Tempo : ${tempoText}\n` +
-          `• Sumber      : ${data.sumber_default || 'cash'}\n` +
-          `• Kategori    : ${data.kategori || 'kebutuhan'}\n\n` +
+          `• ID Langganan : ${idSub}\n` +
+          `• Layanan      : ${data.nama_layanan}\n` +
+          `• Nominal      : ${formatRupiah(data.nominal)}\n` +
+          `• Frekuensi    : ${data.frekuensi || 'bulanan'}\n` +
+          `• Jatuh Tempo  : ${tempoText}\n` +
+          `• Sumber       : ${data.sumber_default || 'cash'}\n` +
+          `• Kategori     : ${data.kategori || 'kebutuhan'}\n\n` +
           `_Bot akan mengingatkan Anda saat jatuh tempo._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
@@ -728,7 +830,7 @@ module.exports = {
 
         const rows = await sheetLangganan.getRows();
         const aktifRows = rows.filter(row => {
-          const status = (row.get('status') || row.get('Status') || '').toLowerCase();
+          const status = (row.get('status') || row.get('Status') || row._rawData[7] || '').toLowerCase();
           return status === 'aktif';
         });
 
@@ -741,11 +843,12 @@ module.exports = {
         let replyText = "📋 *DAFTAR LANGGANAN & TAGIHAN RUTIN*\n";
 
         aktifRows.forEach(row => {
-          const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || '-';
-          const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || '0');
-          const frekuensi = row.get('frekuensi') || row.get('Frekuensi') || 'bulanan';
-          const tgl = row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || '-';
-          const sumber = row.get('sumber_default') || row.get('Sumber_Default') || 'cash';
+          const idSub = row.get('id_langganan') || row.get('ID_Langganan') || row._rawData[0] || '-';
+          const nama = row.get('nama_layanan') || row.get('Nama_Layanan') || row._rawData[1] || '-';
+          const nominal = parseRupiah(row.get('nominal') || row.get('Nominal') || row._rawData[2] || '0');
+          const frekuensi = row.get('frekuensi') || row.get('Frekuensi') || row._rawData[3] || 'bulanan';
+          const tgl = row.get('tanggal_jatuh_tempo') || row.get('Tanggal_Jatuh_Tempo') || row._rawData[4] || '-';
+          const sumber = row.get('sumber_default') || row.get('Sumber_Default') || row._rawData[5] || 'cash';
 
           if (frekuensi === 'bulanan') totalBeban += nominal;
           else if (frekuensi === 'harian') totalBeban += (nominal * 30);
@@ -758,7 +861,7 @@ module.exports = {
           else if (frekuensi === 'tahunan') tempoLabel = `Tgl ${tgl}`;
           else tempoLabel = `Tgl ${tgl}`;
 
-          replyText += `\n• *${nama}* : ${formatRupiah(nominal)} / ${frekuensi}\n` +
+          replyText += `\n• *${idSub} | ${nama}* : ${formatRupiah(nominal)} / ${frekuensi}\n` +
             `  - Jatuh Tempo : ${tempoLabel}\n` +
             `  - Sumber      : ${sumber}\n`;
         });
@@ -780,9 +883,10 @@ module.exports = {
         const rows = await sheetLangganan.getRows();
         const namaTarget = (data.nama_layanan || '').toLowerCase();
         const found = rows.find(row => {
-          const nama = (row.get('nama_layanan') || row.get('Nama_Layanan') || '').toLowerCase();
-          const status = (row.get('status') || row.get('Status') || '').toLowerCase();
-          return nama.includes(namaTarget) && status === 'aktif';
+          const idSub = (row.get('id_langganan') || row._rawData[0] || '').toLowerCase();
+          const nama = (row.get('nama_layanan') || row.get('Nama_Layanan') || row._rawData[1] || '').toLowerCase();
+          const status = (row.get('status') || row.get('Status') || row._rawData[7] || '').toLowerCase();
+          return (nama.includes(namaTarget) || idSub === namaTarget) && status === 'aktif';
         });
 
         if (!found) {
@@ -791,30 +895,36 @@ module.exports = {
         }
 
         // Ambil data langganan
-        const namaLayanan = found.get('nama_layanan') || found.get('Nama_Layanan');
-        const nominal = parseRupiah(found.get('nominal') || found.get('Nominal') || '0');
-        const kategori = found.get('kategori') || found.get('Kategori') || 'kebutuhan';
-        const sumber = found.get('sumber_default') || found.get('Sumber_Default') || 'cash';
+        const idLangganan = found.get('id_langganan') || found._rawData[0] || '-';
+        const namaLayanan = found.get('nama_layanan') || found.get('Nama_Layanan') || found._rawData[1];
+        const nominal = parseRupiah(found.get('nominal') || found.get('Nominal') || found._rawData[2] || '0');
+        const kategori = found.get('kategori') || found.get('Kategori') || found._rawData[6] || 'tagihan';
+        const sumber = found.get('sumber_default') || found.get('Sumber_Default') || found._rawData[5] || 'cash';
 
         // Catat ke sheet transaksi
         const sheetTransaksi = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
+        await sheetTransaksi.loadHeaderRow();
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        const idTrx = await generateTrxId(sheetTransaksi);
 
         await sheetTransaksi.addRow({
-          Timestamp: timestamp,
-          WA_ID: waId.split('@')[0],
-          Tipe: 'pengeluaran',
-          Kategori: kategori,
-          Keterangan: `Bayar ${namaLayanan}`,
-          Nominal: nominal,
-          Sumber: sumber
+          id_transaksi: idTrx,
+          timestamp: timestamp,
+          wa_id: waId.split('@')[0],
+          tipe: 'pengeluaran',
+          kategori: kategori,
+          keterangan: `Bayar tagihan ${namaLayanan}`,
+          nominal: nominal,
+          sumber: sumber
         });
 
         const reply = `✅ *TAGIHAN BERHASIL DIBAYAR*\n\n` +
-          `• Layanan  : ${namaLayanan}\n` +
-          `• Nominal  : ${formatRupiah(nominal)}\n` +
-          `• Sumber   : ${sumber}\n` +
-          `• Kategori : ${kategori}\n\n` +
+          `• ID TRX       : ${idTrx}\n` +
+          `• ID Langganan : ${idLangganan}\n` +
+          `• Layanan      : ${namaLayanan}\n` +
+          `• Nominal      : Rp ${nominal.toLocaleString('id-ID')}\n` +
+          `• Sumber       : ${sumber}\n` +
+          `• Kategori     : ${kategori}\n\n` +
           `_Sudah otomatis tercatat sebagai pengeluaran di sheet transaksi._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
