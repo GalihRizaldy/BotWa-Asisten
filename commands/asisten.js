@@ -259,6 +259,7 @@ module.exports = {
       // ===== AKSI 1: CATAT TRANSAKSI BARU =====
       if (data.action === "catat_transaksi") {
         const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow(); // Refresh cache header
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
         const idTrx = await generateTrxId(sheet);
         const dompetKode = getWalletCode(data.sumber);
@@ -266,13 +267,13 @@ module.exports = {
 
         await sheet.addRow({
           id_transaksi: idTrx,
-          Timestamp: timestamp,
-          WA_ID: waId.split('@')[0],
-          Tipe: data.tipe,
-          Kategori: data.kategori,
-          Keterangan: data.keterangan,
-          Nominal: data.nominal,
-          Sumber: dompetNama
+          timestamp: timestamp,
+          wa_id: waId.split('@')[0],
+          tipe: (data.tipe || '').toLowerCase(),
+          kategori: (data.kategori || '').toLowerCase(),
+          keterangan: data.keterangan,
+          nominal: data.nominal,
+          sumber: dompetNama.toLowerCase()
         });
 
         const emoji = data.tipe === 'pemasukan' ? '💰' : '💸';
@@ -289,6 +290,7 @@ module.exports = {
       // ===== AKSI BARU: TRANSFER =====
       } else if (data.action === "transfer") {
         const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow(); // Refresh cache header
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
         
         const baseId = await generateTrxId(sheet);
@@ -296,32 +298,32 @@ module.exports = {
         const idIn = `${baseId}-B`;
         
         const asalKode = getWalletCode(data.sumber_asal);
-        const asalNama = getWalletName(data.sumber_asal);
+        const asalNama = getWalletName(data.sumber_asal).toLowerCase();
         const tujuanKode = getWalletCode(data.sumber_tujuan);
-        const tujuanNama = getWalletName(data.sumber_tujuan);
+        const tujuanNama = getWalletName(data.sumber_tujuan).toLowerCase();
         
         // Catat Pengeluaran
         await sheet.addRow({
           id_transaksi: idOut,
-          Timestamp: timestamp,
-          WA_ID: waId.split('@')[0],
-          Tipe: "pengeluaran",
-          Kategori: "transfer",
-          Keterangan: data.keterangan || `Transfer ke ${tujuanNama}`,
-          Nominal: data.nominal,
-          Sumber: asalNama
+          timestamp: timestamp,
+          wa_id: waId.split('@')[0],
+          tipe: "pengeluaran",
+          kategori: "transfer",
+          keterangan: data.keterangan || `Transfer ke ${tujuanNama}`,
+          nominal: data.nominal,
+          sumber: asalNama
         });
         
         // Catat Pemasukan
         await sheet.addRow({
           id_transaksi: idIn,
-          Timestamp: timestamp,
-          WA_ID: waId.split('@')[0],
-          Tipe: "pemasukan",
-          Kategori: "transfer",
-          Keterangan: data.keterangan || `Terima transfer dari ${asalNama}`,
-          Nominal: data.nominal,
-          Sumber: tujuanNama
+          timestamp: timestamp,
+          wa_id: waId.split('@')[0],
+          tipe: "pemasukan",
+          kategori: "transfer",
+          keterangan: data.keterangan || `Terima transfer dari ${asalNama}`,
+          nominal: data.nominal,
+          sumber: tujuanNama
         });
         
         const reply = `🔄 *TRANSFER SALDO BERHASIL*\n\n` +
