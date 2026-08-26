@@ -67,11 +67,26 @@ async function startBot() {
   // Save login credentials on update
     sock.ev.on("creds.update", saveCreds);
 
+    if (config.bot?.pairing_number && !sock.authState.creds.registered) {
+      setTimeout(async () => {
+        try {
+          const number = config.bot.pairing_number.replace(/[^0-9]/g, "");
+          const code = await sock.requestPairingCode(number);
+          logger.info(`==========================================`);
+          logger.info(`🔑 KODE PAIRING ANDA: ${code}`);
+          logger.info(`Masukkan kode di atas ke notifikasi WhatsApp`);
+          logger.info(`==========================================`);
+        } catch (err) {
+          logger.error("Gagal meminta kode pairing:", err);
+        }
+      }, 3000);
+    }
+
   // Register all event handlers
     for (const { eventName, handler } of eventHandlers) {
     // Pass only the dependencies that the handler expects
       if (eventName === "connection.update") {
-        sock.ev.on(eventName, handler(sock, logger, saveCreds, startBot));
+        sock.ev.on(eventName, handler(sock, logger, saveCreds, startBot, config));
       } else if (eventName === "messages.upsert") {
         sock.ev.on(eventName, handler(sock, logger, commands));
       } else {

@@ -16,8 +16,8 @@ module.exports = {
    * @param {Function} startBot - Function to restart the bot if needed.
    * @returns {Function}
    */
-  handler: (sock, logger, saveCreds, startBot) => async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
+  handler: (sock, logger, saveCreds, startBot, config) => async ({ connection, lastDisconnect, qr }) => {
+    if (qr && !config?.bot?.pairing_number) {
       logger.info("Scan the QR below to login:");
       console.info(await QRCode.toString(qr, { type: "terminal", small: true }));
     }

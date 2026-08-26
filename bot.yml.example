@@ -9,6 +9,7 @@ bot:
   gemini_api_key: ""            # Isi dengan API Key dari https://aistudio.google.com/app/apikey
   spreadsheet_id: ""            # Isi dengan ID Google Spreadsheet Anda
   owner_number: ""              # Nomor WA Anda (misal: "628123456789") ATAU ID Grup (misal: "1234567890@g.us")
+  pairing_number: ""            # Isi dengan nomor bot Anda (misal "628123456789") jika ingin login menggunakan Pairing Code (tanpa scan QR). Jika kosong, akan pakai QR.
 
 # =====================
 # Logging
