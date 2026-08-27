@@ -162,22 +162,14 @@ async function undoPinjamanRecord(doc, kategori, keterangan, nominal) {
   const sheetPinjaman = doc.sheetsByTitle['pinjaman'] || doc.sheetsByTitle['Pinjaman'];
   if (!sheetPinjaman) return;
 
-  let namaTarget = '';
-  if (lowerKat === 'piutang') {
-    namaTarget = keterangan.replace(/pinjaman ke /i, '').trim();
-  } else if (lowerKat === 'bayar_pinjaman') {
-    namaTarget = keterangan.replace(/bayar pinjaman /i, '').trim();
-  }
-
-  if (!namaTarget) return;
-
   await sheetPinjaman.loadHeaderRow();
   const rows = await sheetPinjaman.getRows();
   let foundRow = null;
   
   for (let i = 0; i < rows.length; i++) {
     const rowNama = (rows[i].get('nama') || rows[i].get('Nama') || '').toLowerCase();
-    if (rowNama === namaTarget.toLowerCase()) {
+    // Cari apakah nama di sheet pinjaman disebut di dalam keterangan transaksi
+    if (rowNama && keterangan.toLowerCase().includes(rowNama)) {
       foundRow = rows[i];
       break;
     }
