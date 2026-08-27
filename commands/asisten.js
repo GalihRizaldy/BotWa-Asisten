@@ -152,6 +152,77 @@ function getWalletCode(input) {
   return "CS01";
 }
 
+// Helper: Undo efek pinjaman jika dibatalkan
+async function undoPinjamanRecord(doc, kategori, keterangan, nominal) {
+  if (!kategori || !keterangan) return;
+  const lowerKat = kategori.toLowerCase();
+  
+  if (lowerKat !== 'piutang' && lowerKat !== 'bayar_pinjaman') return;
+
+  const sheetPinjaman = doc.sheetsByTitle['pinjaman'] || doc.sheetsByTitle['Pinjaman'];
+  if (!sheetPinjaman) return;
+
+  let namaTarget = '';
+  if (lowerKat === 'piutang') {
+    namaTarget = keterangan.replace(/pinjaman ke /i, '').trim();
+  } else if (lowerKat === 'bayar_pinjaman') {
+    namaTarget = keterangan.replace(/bayar pinjaman /i, '').trim();
+  }
+
+  if (!namaTarget) return;
+
+  await sheetPinjaman.loadHeaderRow();
+  const rows = await sheetPinjaman.getRows();
+  let foundRow = null;
+  
+  for (let i = 0; i < rows.length; i++) {
+    const rowNama = (rows[i].get('nama') || rows[i].get('Nama') || '').toLowerCase();
+    if (rowNama === namaTarget.toLowerCase()) {
+      foundRow = rows[i];
+      break;
+    }
+  }
+
+  if (!foundRow) return;
+
+  const pinjamanLama = parseRupiah(foundRow.get('pinjaman') || foundRow.get('Pinjaman') || '0');
+  const pembayaranLama = parseRupiah(foundRow.get('pembayaran') || foundRow.get('Pembayaran') || '0');
+  const sisaLama = parseRupiah(foundRow.get('sisa') || foundRow.get('Sisa') || '0');
+
+  let pinjamanBaru = pinjamanLama;
+  let pembayaranBaru = pembayaranLama;
+  let sisaBaru = sisaLama;
+
+  if (lowerKat === 'piutang') {
+    // Batal utangin (kembalikan pinjaman)
+    pinjamanBaru = pinjamanLama - nominal;
+    sisaBaru = sisaLama - nominal;
+  } else if (lowerKat === 'bayar_pinjaman') {
+    // Batal bayar (kembalikan sisa jadi berutang lagi)
+    pembayaranBaru = pembayaranLama - nominal;
+    sisaBaru = sisaLama + nominal;
+  }
+
+  const status = (sisaBaru <= 0) ? 'LUNAS' : 'BELUM LUNAS';
+
+  if (foundRow.get('pinjaman') !== undefined) foundRow.set('pinjaman', Math.max(0, pinjamanBaru));
+  else if (foundRow.get('Pinjaman') !== undefined) foundRow.set('Pinjaman', Math.max(0, pinjamanBaru));
+
+  if (foundRow.get('pembayaran') !== undefined) foundRow.set('pembayaran', Math.max(0, pembayaranBaru));
+  else if (foundRow.get('Pembayaran') !== undefined) foundRow.set('Pembayaran', Math.max(0, pembayaranBaru));
+
+  if (foundRow.get('sisa') !== undefined) foundRow.set('sisa', Math.max(0, sisaBaru));
+  else if (foundRow.get('Sisa') !== undefined) foundRow.set('Sisa', Math.max(0, sisaBaru));
+
+  if (foundRow.get('status') !== undefined) foundRow.set('status', status);
+  else if (foundRow.get('Status') !== undefined) foundRow.set('Status', status);
+  else if (foundRow.get('keterangan') !== undefined) foundRow.set('keterangan', status);
+  else if (foundRow.get('Keterangan') !== undefined) foundRow.set('Keterangan', status);
+
+  await foundRow.save();
+}
+
+
 // Helper: Generate ID Transaksi (TRX-XXXX)
 async function generateTrxId(sheet) {
   const rows = await sheet.getRows();
@@ -420,8 +491,12 @@ module.exports = {
         
         const idTrx = foundRow.get('id_transaksi') || foundRow._rawData[0] || '-';
         const tipeTrx = foundRow.get('tipe') || foundRow._rawData[3] || '-';
+        const kategoriTrx = foundRow.get('kategori') || foundRow._rawData[4] || '';
+        const keteranganTrx = foundRow.get('keterangan') || foundRow._rawData[5] || '';
         const nominalTrx = parseRupiah(foundRow.get('nominal') || foundRow._rawData[6] || '0');
         const sumberTrx = foundRow.get('sumber') || foundRow._rawData[7] || '-';
+        
+        await undoPinjamanRecord(doc, kategoriTrx, keteranganTrx, nominalTrx);
         
         await foundRow.delete();
         
@@ -458,8 +533,12 @@ module.exports = {
 
         const idTrx = lastRow.get('id_transaksi') || lastRow._rawData[0] || '-';
         const tipeTrx = lastRow.get('tipe') || lastRow._rawData[3] || '-';
+        const kategoriTrx = lastRow.get('kategori') || lastRow._rawData[4] || '';
+        const keteranganTrx = lastRow.get('keterangan') || lastRow._rawData[5] || '';
         const nominalTrx = parseRupiah(lastRow.get('nominal') || lastRow._rawData[6] || '0');
         const sumberTrx = lastRow.get('sumber') || lastRow._rawData[7] || '-';
+
+        await undoPinjamanRecord(doc, kategoriTrx, keteranganTrx, nominalTrx);
 
         await lastRow.delete();
 
