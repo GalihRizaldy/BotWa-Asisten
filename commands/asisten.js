@@ -211,13 +211,14 @@ Kategori 'action' yang tersedia:
 13. "cek_saldo_dompet" -> Jika pengguna hanya menanyakan saldo salah satu dompet/rekening (contoh: "cek saldo dana", "sisa cash berapa?", "saldo mandiri ku berapa").
 14. "hapus_transaksi_id" -> Jika pengguna mengirim perintah hapus transaksi spesifik berdasarkan ID-nya (contoh: "hapus transaksi TRX-0001", "delete TRX-0001").
 15. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik.
-16. "chat" -> Jika pesan hanya sapaan atau obrolan biasa.
+16. "tambah_pinjaman" -> Jika pengguna memberikan pinjaman/utang ke orang lain (contoh: "renggi utang 10k", "pinjemin uang ke ali 50rb").
+17. "chat" -> Jika pesan hanya sapaan atau obrolan biasa.
 
 Aturan Ekstraksi JSON:
 
 A. Jika action = "catat_transaksi":
    - 'tipe': "pemasukan" atau "pengeluaran"
-   - 'kategori': nama kategori
+   - 'kategori': nama kategori. (Catatan: JANGAN gunakan ini jika pengguna memberi pinjaman, gunakan "tambah_pinjaman" saja)
    - 'keterangan': deskripsi singkat transaksi
    - 'nominal': angka (integer)
    - 'sumber': nama dompet/sumber uang (atau kode dompet) dalam huruf kecil. Default "cash".
@@ -251,7 +252,13 @@ H. Jika action = "bayar_pinjaman":
    - 'nominal': angka (integer)
    - 'sumber': nama dompet tujuan pembayaran (huruf kecil)
 
-I. Jika action = "cek_saldo_dompet":
+I. Jika action = "tambah_pinjaman":
+   - 'nama': nama orang yang berutang
+   - 'nominal': angka (integer)
+   - 'sumber': nama dompet sumber dana dikeluarkan (huruf kecil)
+   - 'keterangan': opsional deskripsi
+
+J. Jika action = "cek_saldo_dompet":
    - 'sumber': ekstrak nama dompetnya dalam huruf kecil (misal: dana, cash, seabank).
    - 'is_transaction': false
 
@@ -877,6 +884,88 @@ module.exports = {
           `• Masuk ke     : ${dompetKode} ${dompetNama.toUpperCase()}\n` +
           `• Sisa Piutang : Rp ${Math.max(0, sisaBaru).toLocaleString('id-ID')} (${status})\n\n` +
           `_Sudah otomatis tercatat di sheet transaksi dan sheet pinjaman._`;
+
+        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI BARU: TAMBAH PINJAMAN =====
+      } else if (data.action === "tambah_pinjaman") {
+        const doc = await getDoc(sheetId);
+        const sheetPinjaman = doc.sheetsByTitle['pinjaman'] || doc.sheetsByTitle['Pinjaman'];
+        const sheetTransaksi = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
+
+        if (!sheetPinjaman) {
+          await sock.sendMessage(from, { text: "Sheet 'pinjaman' belum tersedia." }, { quoted: msg });
+          return;
+        }
+
+        const namaTarget = (data.nama || 'Tanpa Nama').trim();
+        
+        // Cek apakah orang ini sudah punya utang (untuk ditambah)
+        await sheetPinjaman.loadHeaderRow();
+        const rows = await sheetPinjaman.getRows();
+        let foundRow = null;
+        for (let i = 0; i < rows.length; i++) {
+          const rowNama = (rows[i].get('nama') || rows[i].get('Nama') || '').toLowerCase();
+          if (rowNama && rowNama === namaTarget.toLowerCase()) {
+            foundRow = rows[i];
+            break;
+          }
+        }
+
+        if (foundRow) {
+          // Update pinjaman yang sudah ada
+          const pinjamanLama = parseRupiah(foundRow.get('pinjaman') || foundRow.get('Pinjaman') || '0');
+          const sisaLama = parseRupiah(foundRow.get('sisa') || foundRow.get('Sisa') || '0');
+          
+          const pinjamanBaru = pinjamanLama + data.nominal;
+          const sisaBaru = sisaLama + data.nominal;
+          const status = (sisaBaru <= 0) ? 'LUNAS' : 'BELUM LUNAS';
+
+          if (foundRow.get('pinjaman') !== undefined) foundRow.set('pinjaman', pinjamanBaru);
+          else if (foundRow.get('Pinjaman') !== undefined) foundRow.set('Pinjaman', pinjamanBaru);
+          
+          if (foundRow.get('sisa') !== undefined) foundRow.set('sisa', sisaBaru);
+          else if (foundRow.get('Sisa') !== undefined) foundRow.set('Sisa', sisaBaru);
+
+          if (foundRow.get('status') !== undefined) foundRow.set('status', status);
+          else if (foundRow.get('Status') !== undefined) foundRow.set('Status', status);
+          
+          await foundRow.save();
+        } else {
+          // Buat baris baru
+          await sheetPinjaman.addRow({
+            nama: namaTarget,
+            pinjaman: data.nominal,
+            pembayaran: 0,
+            sisa: data.nominal,
+            status: 'BELUM LUNAS'
+          });
+        }
+
+        // Catat sebagai pengeluaran di sheet transaksi
+        await sheetTransaksi.loadHeaderRow();
+        const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        const idTrx = await generateTrxId(sheetTransaksi);
+        const dompetKode = getWalletCode(data.sumber);
+        const dompetNama = getWalletName(data.sumber).toLowerCase();
+
+        await sheetTransaksi.addRow({
+          id_transaksi: idTrx,
+          timestamp: timestamp,
+          wa_id: waId.split('@')[0],
+          tipe: 'pengeluaran',
+          kategori: 'piutang',
+          keterangan: data.keterangan || `pinjaman ke ${namaTarget}`,
+          nominal: data.nominal,
+          sumber: dompetNama
+        });
+
+        const reply = `💸 *PINJAMAN TERCATAT!*\n\n` +
+          `• ID TRX       : ${idTrx}\n` +
+          `• Nama         : ${namaTarget}\n` +
+          `• Tambah Utang : Rp ${data.nominal.toLocaleString('id-ID')}\n` +
+          `• Diambil dari : ${dompetKode} ${dompetNama.toUpperCase()}\n\n` +
+          `_Sudah otomatis masuk ke sheet transaksi & sheet pinjaman._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
