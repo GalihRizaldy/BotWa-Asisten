@@ -157,7 +157,7 @@ async function undoPinjamanRecord(doc, kategori, keterangan, nominal) {
   if (!kategori || !keterangan) return;
   const lowerKat = kategori.toLowerCase();
   
-  if (lowerKat !== 'piutang' && lowerKat !== 'bayar_pinjaman') return;
+  if (lowerKat !== 'piutang' && lowerKat !== 'pinjaman' && lowerKat !== 'bayar_pinjaman') return;
 
   const sheetPinjaman = doc.sheetsByTitle['pinjaman'] || doc.sheetsByTitle['Pinjaman'];
   if (!sheetPinjaman) return;
@@ -185,7 +185,7 @@ async function undoPinjamanRecord(doc, kategori, keterangan, nominal) {
   let pembayaranBaru = pembayaranLama;
   let sisaBaru = sisaLama;
 
-  if (lowerKat === 'piutang') {
+  if (lowerKat === 'piutang' || lowerKat === 'pinjaman') {
     // Batal utangin (kembalikan pinjaman)
     pinjamanBaru = pinjamanLama - nominal;
     sisaBaru = sisaLama - nominal;
@@ -493,12 +493,17 @@ module.exports = {
         
         await foundRow.delete();
         
+        let extraReply = '';
+        if (kategoriTrx.toLowerCase() === 'piutang' || kategoriTrx.toLowerCase() === 'pinjaman' || kategoriTrx.toLowerCase() === 'bayar_pinjaman') {
+          extraReply = `\n_Data saldo pinjaman juga telah otomatis disesuaikan._`;
+        }
+
         const reply = `🗑️ *TRANSAKSI BERHASIL DIHAPUS*\n\n` +
           `• ID       : ${idTrx}\n` +
           `• Tipe     : ${tipeTrx.toUpperCase()}\n` +
           `• Nominal  : Rp ${Math.abs(nominalTrx).toLocaleString('id-ID')}\n` +
           `• Sumber   : ${sumberTrx}\n\n` +
-          `_Data telah dihapus secara permanen._`;
+          `_Data telah dihapus secara permanen._${extraReply}`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
@@ -536,12 +541,17 @@ module.exports = {
 
         await lastRow.delete();
 
+        let extraReply = '';
+        if (kategoriTrx.toLowerCase() === 'piutang' || kategoriTrx.toLowerCase() === 'pinjaman' || kategoriTrx.toLowerCase() === 'bayar_pinjaman') {
+          extraReply = `\n_Data saldo pinjaman juga telah otomatis disesuaikan._`;
+        }
+
         const reply = `🗑️ *TRANSAKSI BERHASIL DIHAPUS*\n\n` +
           `• ID       : ${idTrx}\n` +
           `• Tipe     : ${tipeTrx.toUpperCase()}\n` +
           `• Nominal  : Rp ${Math.abs(nominalTrx).toLocaleString('id-ID')}\n` +
           `• Sumber   : ${sumberTrx}\n\n` +
-          `_Data telah dihapus secara permanen._`;
+          `_Data telah dihapus secara permanen._${extraReply}`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
@@ -939,13 +949,14 @@ module.exports = {
         const dompetKode = getWalletCode(data.sumber);
         const dompetNama = getWalletName(data.sumber).toLowerCase();
 
+        const namaPeminjam = foundRow.get('nama') || foundRow.get('Nama') || data.nama;
         await sheetTransaksi.addRow({
           id_transaksi: idTrx,
           timestamp: timestamp,
           wa_id: waId.split('@')[0],
           tipe: 'pemasukan',
           kategori: 'bayar_pinjaman',
-          keterangan: `bayar pinjaman ${foundRow.get('nama') || foundRow.get('Nama') || data.nama}`,
+          keterangan: `Bayar Pinjaman: ${namaPeminjam} - ${data.keterangan || ''}`.trim(),
           nominal: data.nominal,
           sumber: dompetNama
         });
@@ -1031,7 +1042,7 @@ module.exports = {
           wa_id: waId.split('@')[0],
           tipe: 'pengeluaran',
           kategori: 'piutang',
-          keterangan: data.keterangan || `pinjaman ke ${namaTarget}`,
+          keterangan: `Pinjaman: ${namaTarget} - ${data.keterangan || ''}`.trim(),
           nominal: data.nominal,
           sumber: dompetNama
         });
