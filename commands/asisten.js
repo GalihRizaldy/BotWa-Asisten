@@ -929,6 +929,8 @@ module.exports = {
 
           if (foundRow.get('status') !== undefined) foundRow.set('status', status);
           else if (foundRow.get('Status') !== undefined) foundRow.set('Status', status);
+          else if (foundRow.get('keterangan') !== undefined) foundRow.set('keterangan', status);
+          else if (foundRow.get('Keterangan') !== undefined) foundRow.set('Keterangan', status);
           
           await foundRow.save();
         } else {
@@ -938,7 +940,8 @@ module.exports = {
             pinjaman: data.nominal,
             pembayaran: 0,
             sisa: data.nominal,
-            status: 'BELUM LUNAS'
+            status: 'BELUM LUNAS',
+            keterangan: 'BELUM LUNAS'
           });
         }
 
