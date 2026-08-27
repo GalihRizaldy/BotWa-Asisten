@@ -470,7 +470,8 @@ module.exports = {
       // ===== AKSI BARU: HAPUS BY ID =====
       // ===== AKSI BARU: HAPUS BY ID =====
       } else if (data.action === "hapus_transaksi_id") {
-        const sheet = await getSheet(sheetId, 'transaksi');
+        const doc = await getDoc(sheetId);
+        const sheet = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
         await sheet.loadHeaderRow();
         const rows = await sheet.getRows();
         const targetId = (data.target_id || '').toUpperCase().trim();
@@ -511,7 +512,8 @@ module.exports = {
 
       // ===== AKSI 2: BATALKAN TRANSAKSI TERAKHIR =====
       } else if (data.action === "batal_transaksi") {
-        const sheet = await getSheet(sheetId, 'transaksi');
+        const doc = await getDoc(sheetId);
+        const sheet = doc.sheetsByTitle['transaksi'] || doc.sheetsByIndex[0];
         await sheet.loadHeaderRow();
         const rows = await sheet.getRows();
         const userId = waId.split('@')[0];
