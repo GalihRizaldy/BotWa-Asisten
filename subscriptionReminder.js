@@ -19,11 +19,75 @@ function parseRupiah(val) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-// Helper: Format Rupiah
 function formatRupiah(val) {
   const nominal = parseRupiah(val);
   const prefix = nominal < 0 ? "-Rp " : "Rp ";
   return prefix + Math.abs(nominal).toLocaleString('id-ID');
+}
+
+// Helper: Menghitung selisih hari dari hari ini ke target jatuh tempo
+function getDaysUntil(frekuensi, jatuhTempoStr) {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (frekuensi === 'harian') return 0;
+  
+  if (frekuensi === 'mingguan') {
+    const hari = ['minggu', 'senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu'];
+    const targetIdx = hari.indexOf((jatuhTempoStr || '').toLowerCase().trim());
+    if (targetIdx === -1) return -1;
+    
+    const todayIdx = today.getDay();
+    let diff = targetIdx - todayIdx;
+    if (diff < 0) diff += 7;
+    return diff;
+  }
+  
+  if (frekuensi === 'bulanan') {
+    const targetDate = parseInt(jatuhTempoStr, 10);
+    if (isNaN(targetDate)) return -1;
+    
+    let month = today.getMonth();
+    let year = today.getFullYear();
+    
+    let lastDayThisMonth = new Date(year, month + 1, 0).getDate();
+    let validTargetDate = Math.min(targetDate, lastDayThisMonth);
+    let target = new Date(year, month, validTargetDate);
+    
+    if (target < today) {
+      month += 1;
+      if (month > 11) {
+        month = 0;
+        year += 1;
+      }
+      let lastDayNextMonth = new Date(year, month + 1, 0).getDate();
+      validTargetDate = Math.min(targetDate, lastDayNextMonth);
+      target = new Date(year, month, validTargetDate);
+    }
+    
+    const diffTime = target.getTime() - today.getTime();
+    return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  }
+  
+  if (frekuensi === 'tahunan') {
+    const parts = (jatuhTempoStr || '').split('/');
+    if (parts.length !== 2) return -1;
+    const d = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    if (isNaN(d) || isNaN(m)) return -1;
+    
+    let year = today.getFullYear();
+    let target = new Date(year, m, d);
+    
+    if (target < today) {
+      target = new Date(year + 1, m, d);
+    }
+    
+    const diffTime = target.getTime() - today.getTime();
+    return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  }
+  
+  return -1;
 }
 
 /**
@@ -96,57 +160,30 @@ async function runReminderCheck(sock, debugTarget = null) {
 
       logs.push(`  -> "${nama}" | frekuensi=${frekuensi} | jatuh_tempo=${tglStr} | nominal=${nominal}`);
 
-      if (frekuensi === 'harian') {
-        reminders.push({ nama, nominal, tgl: 'Setiap Hari', type: 'HARI INI' });
-        logs.push(`     COCOK (harian)`);
-      }
-      else if (frekuensi === 'mingguan') {
-        logs.push(`     Bandingkan hari: "${tglStr}" vs "${namaHariIni}"`);
-        if (tglStr === namaHariIni) {
-          reminders.push({ nama, nominal, tgl: `Setiap ${tglStr}`, type: 'HARI INI' });
-          logs.push(`     COCOK (mingguan)`);
-        } else {
-          logs.push(`     TIDAK COCOK`);
-        }
-      }
-      else if (frekuensi === 'bulanan') {
-        const tglJatuhTempo = parseInt(tglStr);
-        if (tglJatuhTempo) {
-          const selisih = tglJatuhTempo - hariIni;
-          logs.push(`     Selisih: ${tglJatuhTempo} - ${hariIni} = ${selisih}`);
-          if (selisih === 0) {
-            reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: 'HARI INI' });
-            logs.push(`     COCOK (hari ini)`);
-          } else if (selisih === 1 || selisih === 2) {
-            reminders.push({ nama, nominal, tgl: tglJatuhTempo, type: `H-${selisih}` });
-            logs.push(`     COCOK (H-${selisih})`);
-          } else {
-            logs.push(`     TIDAK COCOK`);
+      const diffDays = getDaysUntil(frekuensi, tglStr);
+      let shouldRemind = false;
+      let teksHari = "";
+
+      if (frekuensi === 'bulanan' || frekuensi === 'tahunan') {
+          if ([0, 1, 2, 3].includes(diffDays)) {
+              shouldRemind = true;
+              teksHari = diffDays === 0 ? "HARI INI" : `H-${diffDays}`;
           }
-        }
-      }
-      else if (frekuensi === 'tahunan') {
-        const parts = tglStr.split('/');
-        if (parts.length === 2) {
-          const tgl = parseInt(parts[0]);
-          const bln = parseInt(parts[1]);
-          if (bln === bulanIni) {
-            const selisih = tgl - hariIni;
-            if (selisih === 0) {
-              reminders.push({ nama, nominal, tgl: tglStr, type: 'HARI INI' });
-              logs.push(`     COCOK (tahunan - hari ini)`);
-            } else if (selisih === 1 || selisih === 2) {
-              reminders.push({ nama, nominal, tgl: tglStr, type: `H-${selisih}` });
-              logs.push(`     COCOK (tahunan - H-${selisih})`);
-            } else {
-              logs.push(`     TIDAK COCOK (selisih=${selisih})`);
-            }
-          } else {
-            logs.push(`     TIDAK COCOK (bulan beda: ${bln} vs ${bulanIni})`);
+      } else if (frekuensi === 'mingguan') {
+          if ([0, 1].includes(diffDays)) {
+              shouldRemind = true;
+              teksHari = diffDays === 0 ? "HARI INI" : `H-${diffDays}`;
           }
-        }
+      } else if (frekuensi === 'harian') {
+          shouldRemind = true;
+          teksHari = "HARI INI";
+      }
+
+      if (shouldRemind) {
+          reminders.push({ nama, nominal, tgl: tglStr, type: teksHari });
+          logs.push(`     COCOK (${teksHari})`);
       } else {
-        logs.push(`     FREKUENSI TIDAK DIKENAL: "${frekuensi}"`);
+          logs.push(`     TIDAK COCOK (diffDays=${diffDays})`);
       }
     });
 
