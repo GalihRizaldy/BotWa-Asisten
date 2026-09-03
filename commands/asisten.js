@@ -682,7 +682,7 @@ module.exports = {
           return;
         }
 
-        const saldo = parseRupiah(foundRow.get('total_saldo_tersedia') || foundRow.get('total saldo tersedia') || foundRow._rawData[2] || '0');
+        const saldo = parseRupiah(foundRow.get('total_saldo_tersedia') || foundRow.get('total saldo tersedia') || foundRow._rawData[4] || '0');
         const namaDompet = foundRow.get('sumber') || foundRow._rawData[1] || data.sumber;
         
         await sock.sendMessage(from, { text: `💳 *Info Saldo*\nSaldo *${namaDompet.toUpperCase()}* Anda saat ini adalah: *${formatRupiah(saldo)}*` }, { quoted: msg });
