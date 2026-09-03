@@ -35,53 +35,32 @@ const NAMA_BULAN = {
 };
 const BULAN_LABEL = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 
-function parseTimestampDate(ts) {
-  if (!ts) return null;
-  const str = String(ts).trim();
-  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (isoMatch) return new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]));
-  const localMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (localMatch) {
-    const a = parseInt(localMatch[1]);
-    const b = parseInt(localMatch[2]);
-    const y = parseInt(localMatch[3]);
-    if (a > 12) return new Date(y, b - 1, a);
-    if (b > 12) return new Date(y, a - 1, b);
-    return new Date(y, a - 1, b);
+function parseSheetDate(timestampString) {
+  if (!timestampString) return null;
+  const str = String(timestampString).trim();
+  const [datePart] = str.split(/[,\s]+/); 
+  if (!datePart) return null;
+  
+  // Pisahkan DD/MM/YYYY
+  const parts = datePart.split('/');
+  if (parts.length === 3) {
+    return {
+      day: parseInt(parts[0], 10),
+      month: parseInt(parts[1], 10),
+      year: parseInt(parts[2], 10)
+    };
   }
-  const d = new Date(str);
-  if (!isNaN(d.getTime())) return d;
-  return null;
-}
-
-// Helper: Parse timestamp ke { bulan (1-12), tahun }
-// Mendukung format: "2026-08-16 ..." (ISO) dan "8/16/2026 ..." atau "16/8/2026" (lokal)
-function parseTimestampMonth(ts) {
-  if (!ts) return null;
-  const str = String(ts).trim();
-
-  // ISO: 2026-08-16 atau 2026-08-16T...
-  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (isoMatch) return { bulan: parseInt(isoMatch[2]), tahun: parseInt(isoMatch[1]) };
-
-  // Lokal ID: 16/8/2026 atau 8/16/2026
-  const localMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (localMatch) {
-    const a = parseInt(localMatch[1]);
-    const b = parseInt(localMatch[2]);
-    const y = parseInt(localMatch[3]);
-    // Jika angka pertama > 12 pasti tanggal (format d/m/y)
-    if (a > 12) return { bulan: b, tahun: y };
-    // Jika angka kedua > 12 pasti tanggal (format m/d/y)
-    if (b > 12) return { bulan: a, tahun: y };
-    // Default: anggap m/d/y (format JS toLocaleString)
-    return { bulan: a, tahun: y };
+  
+  // Fallback untuk ISO date (YYYY-MM-DD)
+  const isoParts = datePart.split('-');
+  if (isoParts.length === 3) {
+    return {
+      day: parseInt(isoParts[2], 10),
+      month: parseInt(isoParts[1], 10),
+      year: parseInt(isoParts[0], 10)
+    };
   }
-
-  // Fallback: coba parse dengan Date
-  const d = new Date(str);
-  if (!isNaN(d.getTime())) return { bulan: d.getMonth() + 1, tahun: d.getFullYear() };
-
+  
   return null;
 }
 
@@ -728,8 +707,8 @@ module.exports = {
           labelLaporan = bulanLabel.toUpperCase();
           filtered = allRows.filter(row => {
             const timestampStr = row.get('timestamp') || row._rawData[1];
-            const parsed = parseTimestampMonth(timestampStr);
-            return parsed && parsed.bulan === requested.bulan && parsed.tahun === requested.tahun;
+            const parsed = parseSheetDate(timestampStr);
+            return parsed && parsed.month === requested.bulan && parsed.year === requested.tahun;
           });
         } else {
           const now = new Date();
@@ -739,22 +718,20 @@ module.exports = {
           if (periode === 'mingguan') {
              const day = startOfToday.getDay(); 
              const diff = startOfToday.getDate() - day + (day === 0 ? -6 : 1); // Senin
-             startOfPeriode = new Date(startOfToday.setDate(diff));
+             startOfPeriode = new Date(now.getFullYear(), now.getMonth(), diff);
           }
 
           labelLaporan = periode === 'harian' ? 'HARI INI' : 'MINGGU INI';
           filtered = allRows.filter(row => {
             const timestampStr = row.get('timestamp') || row._rawData[1];
-            const d = parseTimestampDate(timestampStr);
-            if (!d) return false;
-            
-            // set d to midnight to compare properly
-            const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            const parsed = parseSheetDate(timestampStr);
+            if (!parsed) return false;
             
             if (periode === 'harian') {
-              return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+              return parsed.year === now.getFullYear() && parsed.month === (now.getMonth() + 1) && parsed.day === now.getDate();
             } else {
               // Mingguan
+              const dMidnight = new Date(parsed.year, parsed.month - 1, parsed.day);
               const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
               return dMidnight >= startOfPeriode && dMidnight <= endOfToday;
             }
