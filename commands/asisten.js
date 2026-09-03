@@ -291,7 +291,7 @@ G. Jika action = "tambah_langganan":
 
 H. Jika action = "bayar_pinjaman":
    - 'nama': nama orang yang berutang/dibayar
-   - 'nominal': angka (integer)
+   - 'nominal': total angka uang riil yang masuk/dibayarkan (integer). Jika uang masuk LEBIH BESAR dari utangnya, TETAP kembalikan uang riil yang masuk (contoh utang 10k dibayar 12k -> nominal: 12000).
    - 'sumber': nama dompet tujuan pembayaran (huruf kecil)
 
 I. Jika action = "tambah_pinjaman":
@@ -905,9 +905,18 @@ module.exports = {
 
         const pinjamanAwal = parseRupiah(foundRow.get('pinjaman') || foundRow.get('Pinjaman') || '0');
         const pembayaranLama = parseRupiah(foundRow.get('pembayaran') || foundRow.get('Pembayaran') || '0');
+        const sisa_utang = parseRupiah(foundRow.get('sisa') || foundRow.get('Sisa') || '0');
         
-        const totalPembayaranBaru = pembayaranLama + data.nominal;
-        const sisaBaru = pinjamanAwal - totalPembayaranBaru;
+        let utangTerbayar = data.nominal;
+        let uangLebih = 0;
+
+        if (data.nominal > sisa_utang) {
+           utangTerbayar = sisa_utang; // Hanya lunasi sebesar sisa utang
+           uangLebih = data.nominal - sisa_utang; // Sisanya adalah uang lebih
+        }
+        
+        const totalPembayaranBaru = pembayaranLama + utangTerbayar;
+        const sisaBaru = sisa_utang - utangTerbayar;
         const status = (sisaBaru <= 0) ? 'LUNAS' : 'BELUM LUNAS';
 
         foundRow.set('pembayaran', totalPembayaranBaru);
@@ -922,29 +931,51 @@ module.exports = {
 
         await sheetTransaksi.loadHeaderRow();
         const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-        const idTrx = await generateTrxId(sheetTransaksi);
         const dompetKode = getWalletCode(data.sumber);
         const dompetNama = getWalletName(data.sumber).toLowerCase();
-
         const namaPeminjam = foundRow.get('nama') || foundRow.get('Nama') || data.nama;
+
+        // Baris 1: Pembayaran Utang
+        const idTrx1 = await generateTrxId(sheetTransaksi);
         await sheetTransaksi.addRow({
-          id_transaksi: idTrx,
+          id_transaksi: idTrx1,
           timestamp: timestamp,
           wa_id: waId.split('@')[0],
           tipe: 'pemasukan',
           kategori: 'bayar_pinjaman',
           keterangan: `Bayar Pinjaman: ${namaPeminjam} - ${data.keterangan || ''}`.trim(),
-          nominal: data.nominal,
+          nominal: utangTerbayar,
           sumber: dompetNama
         });
 
+        // Baris 2: Uang Lebih (Jika ada)
+        let extraReplyInfo = ``;
+        if (uangLebih > 0) {
+          const idTrx2 = await generateTrxId(sheetTransaksi);
+          await sheetTransaksi.addRow({
+            id_transaksi: idTrx2,
+            timestamp: timestamp,
+            wa_id: waId.split('@')[0],
+            tipe: 'pemasukan',
+            kategori: 'pendapatan_lain',
+            keterangan: `Uang lebih dari pelunasan ${namaPeminjam}`,
+            nominal: uangLebih,
+            sumber: dompetNama
+          });
+          
+          extraReplyInfo = `\n*Rincian Alokasi:*\n` +
+            `✅ Pelunasan Utang : Rp ${utangTerbayar.toLocaleString('id-ID')}\n` +
+            `🎁 Uang Lebih/Tip  : Rp ${uangLebih.toLocaleString('id-ID')}\n\n` +
+            `_Uang lebih otomatis dicatat sebagai Pemasukan Lain-lain._\n`;
+        } else {
+          extraReplyInfo = `\n_Sudah otomatis tercatat di sheet transaksi dan sheet pinjaman._\n`;
+        }
+
         const reply = `💰 *PEMBAYARAN PINJAMAN TERCATAT*\n\n` +
-          `• ID TRX       : ${idTrx}\n` +
-          `• Nama         : ${foundRow.get('nama') || foundRow.get('Nama') || data.nama}\n` +
-          `• Nominal      : Rp ${data.nominal.toLocaleString('id-ID')}\n` +
-          `• Masuk ke     : ${dompetKode} ${dompetNama.toUpperCase()}\n` +
-          `• Sisa Piutang : Rp ${Math.max(0, sisaBaru).toLocaleString('id-ID')} (${status})\n\n` +
-          `_Sudah otomatis tercatat di sheet transaksi dan sheet pinjaman._`;
+          `• Nama         : ${namaPeminjam}\n` +
+          `• Uang Masuk   : Rp ${data.nominal.toLocaleString('id-ID')} (ke ${dompetNama.toUpperCase()})\n` +
+          `• Sisa Piutang : Rp ${Math.max(0, sisaBaru).toLocaleString('id-ID')} (${status})\n` +
+          `${extraReplyInfo}`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
 
