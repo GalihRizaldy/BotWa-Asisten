@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-bot-baileys",
-  "version": "0.1.34",
+  "version": "0.1.35",
   "description": "This is a simple and powerful WhatsApp bot built using the [Baileys](https://github.com/WhiskeySockets/Baileys) library, an unofficial WhatsApp Web API for Node.js. It allows you to automate replies, handle user messages, and create intelligent bot logic.",
   "main": "index.js",
   "scripts": {
