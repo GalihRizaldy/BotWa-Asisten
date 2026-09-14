@@ -254,7 +254,8 @@ Kategori 'action' yang tersedia:
 14. "hapus_transaksi_id" -> Jika pengguna mengirim perintah hapus transaksi spesifik berdasarkan ID-nya (contoh: "hapus transaksi TRX-0001", "delete TRX-0001").
 15. "tanya" -> Jika pengguna bertanya tentang data keuangan spesifik.
 16. "tambah_pinjaman" -> Jika pengguna memberikan pinjaman/utang ke orang lain (contoh: "renggi utang 10k", "pinjemin uang ke ali 50rb").
-17. "chat" -> Jika pesan hanya sapaan atau obrolan biasa.
+17. "cek_riwayat_transaksi" -> Jika pengguna meminta riwayat keseluruhan atau spesifik sumber (contoh: "cek riwayat transaksi hari ini", "cek riwayat cash hari ini").
+18. "chat" -> Jika pesan hanya sapaan atau obrolan biasa.
 
 Aturan Ekstraksi JSON:
 
@@ -310,7 +311,11 @@ J. Jika action = "cek_pinjaman", "batal_transaksi", "cek_langganan", "bayar_lang
 K. Jika action = "tanya":
    - 'pertanyaan': isi pertanyaan pengguna.
 
-L. Jika action = "chat":
+L. Jika action = "cek_riwayat_transaksi":
+   - 'periode': "harian" | "mingguan" | "bulanan"
+   - 'sumber': isi nama dompet spesifik (huruf kecil) atau null jika keseluruhan
+
+M. Jika action = "chat":
    - 'pesan': isi pesan pengguna.
 
 Output HARUS selalu dalam format JSON valid tanpa teks tambahan di luar JSON.`;
@@ -1253,6 +1258,85 @@ module.exports = {
           `_Anda tidak akan menerima pengingat untuk tagihan ini lagi._`;
 
         await sock.sendMessage(from, { text: reply }, { quoted: msg });
+
+      // ===== AKSI BARU: CEK RIWAYAT TRANSAKSI =====
+      } else if (data.action === "cek_riwayat_transaksi") {
+        const sheet = await getSheet(sheetId, 'transaksi');
+        await sheet.loadHeaderRow();
+        const rows = await sheet.getRows();
+        
+        const periode = (data.periode || 'harian').toLowerCase();
+        const sumberTarget = data.sumber ? data.sumber.toLowerCase().trim() : null;
+        
+        let filtered = rows;
+        
+        const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        let startOfPeriode = new Date(startOfToday);
+        
+        if (periode === 'mingguan') {
+           const day = startOfToday.getDay(); 
+           const diff = startOfToday.getDate() - day + (day === 0 ? -6 : 1); // Senin
+           startOfPeriode = new Date(now.getFullYear(), now.getMonth(), diff);
+        }
+        
+        filtered = filtered.filter(row => {
+          const timestampStr = row.get('timestamp') || row._rawData[1];
+          const parsed = parseSheetDate(timestampStr);
+          if (!parsed) return false;
+          
+          if (periode === 'harian') {
+            return parsed.year === now.getFullYear() && parsed.month === (now.getMonth() + 1) && parsed.day === now.getDate();
+          } else if (periode === 'mingguan') {
+            const dMidnight = new Date(parsed.year, parsed.month - 1, parsed.day);
+            const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+            return dMidnight >= startOfPeriode && dMidnight <= endOfToday;
+          } else if (periode === 'bulanan') {
+            return parsed.year === now.getFullYear() && parsed.month === (now.getMonth() + 1);
+          }
+          return true;
+        });
+        
+        if (sumberTarget) {
+          filtered = filtered.filter(row => {
+            const s = (row.get('sumber') || row._rawData[7] || '').toLowerCase();
+            return s === sumberTarget;
+          });
+        }
+        
+        let latestRows = [...filtered].reverse().slice(0, 5);
+        
+        const periodeLabel = periode === 'harian' ? 'Hari Ini' : (periode === 'mingguan' ? 'Minggu Ini' : 'Bulan Ini');
+        let headerTitle = sumberTarget 
+          ? `📜 *RIWAYAT TRANSAKSI TERAKHIR*\nPeriode: ${periodeLabel}` 
+          : `📜 *RIWAYAT TRANSAKSI TERAKHIR (SEMUA)*\nPeriode: ${periodeLabel}`;
+          
+        if (latestRows.length === 0) {
+           await sock.sendMessage(from, { text: `Belum ada transaksi untuk periode/sumber tersebut.` }, { quoted: msg });
+           return;
+        }
+        
+        let replyText = headerTitle + "\n\n";
+        latestRows.forEach((row, i) => {
+          const timestamp = row.get('timestamp') || row._rawData[1];
+          const tipe = (row.get('tipe') || row._rawData[3] || '').toLowerCase();
+          const keterangan = row.get('keterangan') || row._rawData[5] || '-';
+          const nominalStr = row.get('nominal') || row._rawData[6] || '0';
+          const sumberStr = row.get('sumber') || row._rawData[7] || '-';
+          
+          const nominalVal = parseRupiah(nominalStr);
+          const formattedNominal = formatRupiah(nominalVal);
+          
+          const emoji = tipe === 'pemasukan' ? '🟢 Pemasukan' : '🔴 Pengeluaran';
+          
+          replyText += `${i+1}️⃣ *[${timestamp}]*\n` +
+                       `${emoji}: ${keterangan}\n` +
+                       (sumberTarget ? '' : `💳 Sumber: ${sumberStr}\n`) +
+                       `💵 Nominal: ${formattedNominal}\n` +
+                       (sumberTarget ? `      Sumber : ${sumberStr.toUpperCase()}\n\n` : `\n\n`);
+        });
+        
+        await sock.sendMessage(from, { text: replyText.trim() }, { quoted: msg });
 
       // ===== AKSI 10: TANYA LAPORAN =====
       } else if (data.action === "tanya") {
